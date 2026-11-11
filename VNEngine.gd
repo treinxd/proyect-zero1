@@ -1206,16 +1206,33 @@ func _build_title_screen() -> void:
 	)
 	vbox.add_child(btn_load_menu)
 
-	var btn_direct_hack = Button.new()
-	btn_direct_hack.text = "💻  DIRECT ACCESS: CONTAINMENT CONSOLE (FNAF 2D)"
-	btn_direct_hack.custom_minimum_size = Vector2(0, 44)
-	btn_direct_hack.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	_style_button(btn_direct_hack, Color("#b829ff"), true)
-	btn_direct_hack.pressed.connect(func():
+	var direct_hbox = HBoxContainer.new()
+	direct_hbox.add_theme_constant_override("separation", 10)
+	vbox.add_child(direct_hbox)
+
+	var btn_direct_mia = Button.new()
+	btn_direct_mia.text = "🔮 TEST CONSOLE: MIA (PREDICTION)"
+	btn_direct_mia.custom_minimum_size = Vector2(0, 44)
+	btn_direct_mia.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn_direct_mia.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	_style_button(btn_direct_mia, Color("#f600ff"), true)
+	btn_direct_mia.pressed.connect(func():
 		title_screen.visible = false
 		_launch_hacking_minigame({"mission_index": 0, "on_mission": "mia_survived", "on_romance": "mia_romance", "on_fail": "night_breach_mia"})
 	)
-	vbox.add_child(btn_direct_hack)
+	direct_hbox.add_child(btn_direct_mia)
+
+	var btn_direct_naomi = Button.new()
+	btn_direct_naomi.text = "🛡️ TEST CONSOLE: NAOMI (SHIELD)"
+	btn_direct_naomi.custom_minimum_size = Vector2(0, 44)
+	btn_direct_naomi.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn_direct_naomi.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	_style_button(btn_direct_naomi, Color("#00ff9d"), true)
+	btn_direct_naomi.pressed.connect(func():
+		title_screen.visible = false
+		_launch_hacking_minigame({"mission_index": 1, "on_mission": "naomi_survived", "on_romance": "naomi_romance", "on_fail": "night_breach_naomi"})
+	)
+	direct_hbox.add_child(btn_direct_naomi)
 
 	var btn_settings = Button.new()
 	btn_settings.text = "⚙️  SETTINGS & DISPLAY"

@@ -2,20 +2,24 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://det2y7jye12nt"
-path="res://.godot/imported/mia_board.jpg-1f6e59f50e8f69aefacc8f776b408a3e.ctex"
+uid="uid://cjvmrp7om81qp"
+path.s3tc="res://.godot/imported/game_Tex_PS2_Wall.png-89558b7be349a7f7aba97690003bbc2d.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
+}
+generator_parameters={
+"md5": "5b37b0b06aa93111d7b6047f7fb46d40"
 }
 
 [deps]
 
-source_file="res://assets/sprites/mia_board.jpg"
-dest_files=["res://.godot/imported/mia_board.jpg-1f6e59f50e8f69aefacc8f776b408a3e.ctex"]
+source_file="res://assets/bunker/game_Tex_PS2_Wall.png"
+dest_files=["res://.godot/imported/game_Tex_PS2_Wall.png-89558b7be349a7f7aba97690003bbc2d.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0
@@ -23,7 +27,7 @@ compress/rdo_quality_loss=0.0
 compress/hdr_compression=1
 compress/normal_map=0
 compress/channel_pack=0
-mipmaps/generate=false
+mipmaps/generate=true
 mipmaps/limit=-1
 roughness/mode=0
 roughness/src_normal=""
@@ -37,4 +41,4 @@ process/normal_map_invert_y=false
 process/hdr_as_srgb=false
 process/hdr_clamp_exposure=false
 process/size_limit=0
-detect_3d/compress_to=1
+detect_3d/compress_to=0
