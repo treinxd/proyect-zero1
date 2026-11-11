@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="MissionData" format=3 uid="uid://dkg52dmfwarq4"]
+
+[ext_resource type="Script" uid="uid://cbhw4uqrcc3ff" path="res://MissionData.gd" id="1_33ovy"]
+
+[resource]
+script = ExtResource("1_33ovy")
+agent_name = "Mia"
+agent_codename = "ORACLE-01"
+agent_color = Color(0.964706, 0, 1, 1)
+companion_perk = "prediction"
+security_guard_name = "Naomi"
+security_guard_codename = "AEGIS-02"
+monster_name = "SUBJECT-ZERO"
+total_security_levels = 5
+mission_time_seconds = 180
+metadata/_custom_type_script = "uid://cbhw4uqrcc3ff"

@@ -1,0 +1,16 @@
+[gd_scene format=3 uid="uid://b7vnengine001"]
+
+[ext_resource type="Script" path="res://VNEngine.gd" id="1_vneng"]
+[ext_resource type="Script" uid="uid://cbhw4uqrcc3ff" path="res://MissionData.gd" id="2_mdata"]
+[ext_resource type="Resource" uid="uid://dkg52dmfwarq4" path="res://mision_02.tres" id="3_m02"]
+[ext_resource type="Resource" uid="uid://cgl2h5nqqg3e4" path="res://mision_01.tres" id="4_m01"]
+
+[node name="VNEngine" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_vneng")
+missions = Array[ExtResource("2_mdata")]([ExtResource("3_m02"), ExtResource("4_m01")])

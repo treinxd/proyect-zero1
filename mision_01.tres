@@ -1,0 +1,79 @@
+[gd_resource type="Resource" script_class="MissionData" format=3 uid="uid://cgl2h5nqqg3e4"]
+
+[ext_resource type="Script" uid="uid://cbhw4uqrcc3ff" path="res://MissionData.gd" id="1_671ae"]
+
+[resource]
+script = ExtResource("1_671ae")
+agent_name = "Naomi"
+agent_codename = "AEGIS-02"
+agent_color = Color(0, 1, 0.615686, 1)
+companion_perk = "forgive_hack"
+security_guard_name = "Mia"
+security_guard_codename = "ORACLE-01"
+monster_name = "SUBJECT-ZERO"
+total_security_levels = 5
+camera_label = "CAM_02_CONTROL_ROOM"
+sector_name = "CONTAINMENT SECTOR // 5 SECURITY GATES"
+map_agent_pos = Vector2(0.86, 0.50)
+map_target_pos = Vector2(0.14, 0.50)
+initial_bpm = 95
+initial_affinity = 50
+mission_time_seconds = 180
+system_intro = "NIGHT SHIFT CONTAINMENT ACTIVE. NAOMI'S AEGIS BARRIER ONLINE (BLOCKS 1 MONSTER HACK)."
+agent_opening_line = "«I'm right here beside you, Operator! My Aegis shield will forgive and block 1 hack from Subject-Zero tonight, while Mia closes the 5 Security Gates on the floor!»"
+agent_panic_line = "«Subject-Zero just breached another gate! Keep counter-hacking so Mia can seal the doors!»"
+reassure_button_label = "HOLD HER HAND & REASSURE (-25 BPM / +20 BOND)"
+operator_reassure_line = "«Take a breath, Naomi. You're doing great protecting our console—we'll stop this monster together.»"
+agent_reassure_reply = "«Heh... you always know how to calm me down. Don't worry, if the monster slips a hack past you, I've got your back!»"
+tab_1_content = "[b][color=#00f0ff]=== 5-LEVEL CONTAINMENT GATE PROTOCOLS ===[/color][/b]
+[color=#667788]------------------------------------------------------------[/color]
+To seal all [b]5 Security Levels[/b] with Field Guard [b]Mia[/b], select the active [b]Gate Lock Authority[/b] and inject the matching [b]Override Token[/b]:
+
+[b]• KAITO TAKAHASHI[/b] | [color=#ff5577]STATUS: CORRUPTED BY ENTITY[/color]
+  Token: [code]TAKA-00[/code]
+  Warning: Compromised bio-signature. Selecting this lets Subject-Zero advance 1 Security Level!
+
+[b]• DR. VALERIA KROSS[/b] | [color=#00ff9d]STATUS: NIGHT CONTAINMENT SUPERVISOR (VALID)[/color]
+  Role: Level 1-5 Blast Door Authority | Active Shift
+  Note: Key updated in the security audit log (see Tab 02).
+
+[b]• AUTOMATED SYSTEMS[/b] | [color=#ffcc00]STATUS: BOTS ONLY[/color]
+  Note: Invalid for manual blast door lockdown."
+tab_2_content = "[b][color=#00f0ff]=== INTERCEPTED CONTAINMENT AUDIT LOG ===[/color][/b]
+[color=#667788]SOURCE: warden-daemon@zero-facility.net[/color]
+
+Emergency blast door token regenerated for supervisor [b]Dr. Valeria Kross[/b].
+Assigned Gate Lockdown Token ID: [b][color=#00ff9d]KROSS-77[/color][/b]
+
+[color=#ff6699][b][NAOMI'S COMPANION PERK — AEGIS SHIELD]:[/b]
+Naomi will automatically intercept and forgive 1 Monster Hack or mistake tonight so Subject-Zero cannot advance a Security Level on that breach![/color]"
+breach_difficulty = 3
+suspects_list = PackedStringArray("Kaito Takahashi", "Dr. Valeria Kross", "Automated Systems")
+correct_suspect_index = 1
+correct_token_code = "KROSS-77"
+wrong_suspect_feedback = PackedStringArray("«Alert! Takahashi's key is corrupted by Subject-Zero! The monster used the fault to try to breach a gate!»", "«The supervisor identity is right, but that Token ID doesn't match the audit log (KROSS-77)!»", "«Error! Bot credentials cannot seal human blast doors!»")
+btn_mission_label = "🔒 SEAL SECURITY GATE (Guard Closes Door)"
+mission_success_text = "ALL 5 SECURITY GATES SEALED: Subject-Zero is locked back in the Core! You and Naomi survived the night!"
+btn_romance_label = "💖 OVERCHARGE SHIELD FOR HER (Romance / Instant Seal)"
+operator_protect_line = "«I'm syncing my neural link directly with your Aegis barrier, Naomi—sealing all blast doors right now!»"
+agent_protect_reply = "«Nobody has ever put their life on the line for me like that... Tonight you're all mine, Operator.»"
+romance_success_text = "ROMANCE CONTAINMENT COMPLETE: You protected Naomi and Mia and sealed Subject-Zero with maximum bond!"
+vn_intro_script = "SYSTEM | [CONTAINMENT BUNKER ZERO // 11:55 PM] — 5 Minutes until Night Shift.
+Naomi | «Alright Operator, I've got my counter-ICE deck plugged into your terminal! Mia is already in position by the Security Gates.»
+OPERATOR | «Be careful, Naomi. Subject-Zero is trying to hack through all 5 Security Levels tonight.»
+Naomi | «Relax! Even if that monster manages to hack you once, I'll block it for you! Just tell me... did you pick me for my shield or because you wanted me sitting next to you?»
+CHOICE | «I wanted you by my side tonight, Naomi (+15 Naomi Bond)» | 15 | «Haha, look at you making me blush before a horror shift! I won't let that monster touch a hair on your head.» | «Your Aegis shield is our best defense (+5 Naomi Bond)» | 5 | «Smart choice, boss! Let's show Subject-Zero who owns this network.»
+Naomi | «Midnight alarm! Subject-Zero is attacking Security Gate 1—let's counter-hack it!»"
+vn_outro_mission_script = "SYSTEM | [06:00 AM // NIGHT SHIFT SURVIVED — ALL 5 GATES SEALED]
+Naomi | «Boom! Mia just sealed the fifth blast door! Subject-Zero is locked tight in its cage!»
+OPERATOR | «Your Aegis defense saved our necks tonight, Naomi.»
+Naomi | «Yeah, we survived! Now come on, you owe me breakfast at the bunker diner.»"
+vn_outro_romance_script = "SYSTEM | [06:00 AM // PRIVATE QUARTERS — MAXIMUM BOND]
+Naomi | «When Subject-Zero tried to overload our console, you linked your neural rig straight to mine to protect me...»
+OPERATOR | «No monster is getting past me while you're by my side, Naomi.»
+Naomi | «You're unbelievable, Operator... Lock the door. Neither of us is leaving this room until noon.»"
+vn_outro_failure_script = "SYSTEM | [CRITICAL BREACH // ALL 5 SECURITY LEVELS COMPROMISED]
+Naomi | «My Aegis barrier shattered! The Level 5 blast door is opening—OPERATOR, RUN—AAAAAH!»
+OPERATOR | «NAOMI! NO—!»
+SYSTEM | CONTAINMENT FAILED. Your companion was killed, and Subject-Zero claimed your life next. Restarting Night Shift..."
+metadata/_custom_type_script = "uid://cbhw4uqrcc3ff"

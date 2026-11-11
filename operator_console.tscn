@@ -1,0 +1,16 @@
+[gd_scene format=3 uid="uid://c5o6q1w1prnrt"]
+
+[ext_resource type="Script" uid="uid://cvlejxvypwqk5" path="res://operator_console.gd" id="1_j53hv"]
+[ext_resource type="Script" uid="uid://cbhw4uqrcc3ff" path="res://MissionData.gd" id="2_t5ps6"]
+[ext_resource type="Resource" uid="uid://dkg52dmfwarq4" path="res://mision_02.tres" id="3_t5ps6"]
+[ext_resource type="Resource" uid="uid://cgl2h5nqqg3e4" path="res://mision_01.tres" id="4_m01"]
+
+[node name="OperatorConsole" type="Control" unique_id=1376247280]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_j53hv")
+available_missions = Array[ExtResource("2_t5ps6")]([ExtResource("3_t5ps6"), ExtResource("4_m01")])
