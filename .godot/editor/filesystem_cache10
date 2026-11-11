@@ -1,0 +1,27 @@
+78098b89c88a74ebe8c20117b8754620
+::res://::1794367766
+icon.svg::CompressedTexture2D::2688712880146496924::1794340143::1794340148::1::::<><><>0<>0<>314aedc896fe774a85ed06dd4a8c6c66<>res://.godot/imported/icon.svg-218a8f2b3041327d8a5756f3a245f83b.ctex::
+mision_01.tres::Resource/MissionData::5218336040402660997::1794357348::0::1::::<><><>0<>0<><>::uid://cbhw4uqrcc3ff::::res://MissionData.gd
+mision_02.tres::Resource/MissionData::7875406656566711937::1794357306::0::1::::<><><>0<>0<><>::uid://cbhw4uqrcc3ff::::res://MissionData.gd
+MissionData.gd::GDScript::4858869493125816687::1794357259::0::1::::MissionData<>Resource<><>0<>0<><>::
+operator_console.gd::GDScript::6269775420785074450::1794366334::0::1::::<>Control<><>0<>0<><>::
+operator_console.tscn::PackedScene::6909320165357099969::1794351371::0::1::::<><><>0<>0<><>::uid://cvlejxvypwqk5::::res://operator_console.gd<>uid://cbhw4uqrcc3ff::::res://MissionData.gd<>uid://dkg52dmfwarq4::::res://mision_02.tres<>uid://cgl2h5nqqg3e4::::res://mision_01.tres
+VNCharacterData.gd::GDScript::7239688896667699055::1794354841::0::1::::VNCharacterData<>Resource<><>0<>0<><>::
+VNEngine.gd::GDScript::6145592763919139683::1794357891::0::1::::VNEngine<>Control<><>0<>0<><>::
+VNStageActor.gd::GDScript::285969021715224024::1794354843::0::1::::VNStageActor<>Control<><>0<>0<><>::
+VNStoryScript.gd::GDScript::23889522794144344::1794358024::0::1::::VNStoryScript<>RefCounted<><>0<>0<><>::
+vn_engine.tscn::PackedScene::4676612769480397376::1794349988::0::1::::<><><>0<>0<><>::
+::res://assets/::1794354129
+example.png::CompressedTexture2D::2985560567191648139::1794353042::1794353406::1::::<><><>0<>0<>e20c3a4e031fdef5c5b274c4a5e45644<>res://.godot/imported/example.png-ae1f048b6c7e695e02f9194ce1fe22ab.ctex::
+NetflixSans-Bd.ttf::FontFile::1593164448982363178::1760977066::1794354129::1::::<><><>0<>0<>1c1e9f35bcf2a04f6f744f35ef52579e<>res://.godot/imported/NetflixSans-Bd.ttf-fecca3b2957b6c10b58ee003c24a9b34.fontdata::
+::res://assets/backgrounds/::1794351734
+bunker.jpg::CompressedTexture2D::2348340573799744047::1794351653::1794351734::1::::<><><>0<>0<>35c7b5fdbfa7cea64bb1c599129ed5bf<>res://.godot/imported/bunker.jpg-e4478a80ed45abecdbdb3099eed25ec3.ctex::
+default_bg.jpg::CompressedTexture2D::590567502288757468::1794351653::1794351734::1::::<><><>0<>0<>42f94f2d9e4bfaa87f40dfbf09433f9b<>res://.godot/imported/default_bg.jpg-9371d1b271a20a53d67759c2734acece.ctex::
+::res://assets/menu/::1794353406
+menu_display_icon.png::CompressedTexture2D::1977563350837457695::1794353031::1794353406::1::::<><><>0<>0<>2bdf574c4e8d2ba2b8d4ff0612a47482<>res://.godot/imported/menu_display_icon.png-8dd9113959e4e9eee905696b5d62d21c.ctex::
+Rectángulo 1.png::CompressedTexture2D::8075993620647935061::1794352808::1794353406::1::::<><><>0<>0<>9acaabf72ffd5ad5a9e7c4160b82b686<>res://.godot/imported/Rectángulo 1.png-2f685a6bd64ea0b1c66fa15b0335bc9f.ctex::
+::res://assets/sprites/::1794362777
+maria_sheet.jpg::CompressedTexture2D::2690149354288848207::1794350363::1794350900::1::::<><><>0<>0<>9864883adbe5238547be69772fcdb7eb<>res://.godot/imported/maria_sheet.jpg-aa5fed98cfba9982e8c84172d701cce9.ctex::
+maria_sheet.png::CompressedTexture2D::5600445129709472222::1794354765::1794355002::1::::<><><>0<>0<>f5a943dbccc25052734416ace81c7295<>res://.godot/imported/maria_sheet.png-5ea403e2ea6a3d457d577a9e4678d9d7.ctex::
+mia_board.jpg::CompressedTexture2D::7480924516564273929::1794362490::1794362777::1::::<><><>0<>0<>96bc2d3e05889be784b3238506bb5c57<>res://.godot/imported/mia_board.jpg-1f6e59f50e8f69aefacc8f776b408a3e.ctex::
+naomi_board.jpg::CompressedTexture2D::3790036667950443163::1794362490::1794362777::1::::<><><>0<>0<>e517dfd492af08d3b65bc5cd46c76b9b<>res://.godot/imported/naomi_board.jpg-e54f4cd346daa2e2f7722903455bc4f5.ctex::
