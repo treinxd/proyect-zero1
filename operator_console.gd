@@ -5,8 +5,38 @@ signal hacking_completed(outcome_type: String, final_affinity: int)
 @export var available_missions: Array[MissionData] = []
 @export var starting_mission_index: int = 0
 @export var start_in_vn_mode: bool = false
-@export var enable_crt_effect: bool = true
-@export_range(0.0, 1.0, 0.05) var crt_intensity: float = 0.65
+
+# --- CÁMARAS (PANEO + LENTE ESTIRADO + ESTADOS) ---
+@export_group("Cámaras Estilo FNAF (Imágenes por Estado)")
+@export var tex_cam_empty = load("res://assets/bunker/hall1.png")
+@export var tex_cam_door_locked: Texture2D    # Compuerta cerrada
+@export var tex_monster_stage_1: = load("res://assets/bunker/hall1_m1.png")
+@export var tex_monster_stage_2: = load("res://assets/bunker/hall1_m2.png") # Fase 2 (40-74%): Monstruo a mitad del pasillo
+@export var tex_monster_stage_3: = load("res://assets/bunker/hall1_m3.png")  # Fase 3 (75-100%): Monstruo pegado a la cámara
+@export var tex_ghost_girl_state: Texture2D   # Niña Fantasma mirando a la cámara
+
+# Video de la Niña (1824x768), UN solo archivo: 0:00-1:00 mirando a cámara, 1:00-2:00 jumpscare
+@export_file("*.ogv") var ghost_video_path: String = "res://assets/videos/jumpscare_fg.ogv"
+
+# --- VIDEOS DE LA COMPAÑERA EN EL PANEL IZQUIERDO (8s CADA UNO) ---
+@export_group("Videos de Compañera (Panel Izquierdo)")
+## Video 1 (8s): Idle normal
+@export_file("*.ogv") var naomi_idle_1_video_path: String = "res://assets/videos/nmidle.ogv"
+## Video 2 (8s): Mirando alrededor
+@export_file("*.ogv") var naomi_idle_2_video_path: String = "res://assets/videos/nmlook.ogv"
+## Video 3 (8s en loop): Preocupada mirando hacia abajo tratando de arreglar la terminal
+@export_file("*.ogv") var naomi_hacked_video_path: String = "res://assets/videos/nmhack.ogv"
+@export var naomi_idle_wait_seconds: float = 5.0 # Espera de 5s entre el Video 1 y el Video 2
+
+var companion_video_player: VideoStreamPlayer
+var companion_static_burst_rect: ColorRect
+var companion_idle_1_stream: VideoStream
+var companion_idle_2_stream: VideoStream
+var companion_hacked_stream: VideoStream
+var companion_idle_wait_timer: float = 0.0
+var companion_static_timer: float = 0.0
+var companion_was_hacked_state: bool = false
+var companion_next_is_look_around: bool = false # Alterna entre Video 1 (Idle) y Video 2 (Mirando alrededor)
 
 var embedded_in_vn_engine: bool = false
 var embedded_in_3d_monitor: bool = false
@@ -19,9 +49,9 @@ var affinity: int = 50
 var time_left: int = 180
 var game_active: bool = false
 var pulse_phase: float = 0.0
-var last_outcome_type: String = "mission" # "mission", "romance", "failure"
+var last_outcome_type: String = "mission"
 
-# --- ENERGÍA, TEMPERATURA Y HACKEOS DEL MONSTRUO ---
+# --- ENERGÍA, TEMPERATURA Y SABOTAJES ---
 var power_energy: float = 100.0
 var bunker_temperature: float = 24.0
 const NORMAL_TEMP: float = 24.0
@@ -30,35 +60,30 @@ var temp_hacked_by_monster: bool = false
 var light_hacked_by_monster: bool = false
 var companion_pc_unlocked: bool = true
 
-# --- TEMPORIZADORES INDEPENDIENTES Y AZAROSOS DE HACKEO ---
-var next_light_hack_timer: float = 14.0
-var next_cooling_hack_timer: float = 20.0
-var next_pc_hack_timer: float = 26.0
+# --- TEMPORIZADORES DE EVENTOS ---
+var next_cooling_hack_timer: float = 22.0
+var next_pc_hack_timer: float = 25.0
 
-# --- TEMPORIZADOR RANDOM AL CERRARLE LA PUERTA (0.0 A 10.0 SEGUNDOS) ---
+# --- TEMPORIZADOR OCULTO AL CERRARLE LA PUERTA ---
 var door_hold_timer: float = 0.0
 var door_hold_target_time: float = -1.0
 
-# --- ESTADO DE CONTENCIÓN DEL MONSTRUO (TOPOLOGÍA 3 - 2 - 2 - 1) ---
+# --- ESTADO DE SUBJECT-ZERO (TOPOLOGÍA 3 - 2 - 2 - 1) ---
 const TOTAL_SECURITY_LEVELS: int = 4
 const TOTAL_DEFENSES_REQUIRED: int = 5
 const CAM_NODE_IDS: Array[String] = ["1A", "1", "1B", "2A", "2B", "3A", "3B", "4"]
 var monster_security_level: int = 1
-var monster_branch: String = "B" # "A" = 1A (Arriba), "B" = 1 (Medio), "C" = 1B (Abajo)
+var monster_branch: String = "B"
 var monster_spotted_on_cam: bool = false
 var monster_attack_active: bool = false
-var monster_cooldown_timer: float = 5.0
+var monster_cooldown_timer: float = 4.0
 var monster_last_node_id: String = "1"
 var monster_advance_on_next_wave: bool = false
 var gates_closed_by_guard: int = 0
 var door_node_states: Dictionary = {
-	"1A": "OPEN",
-	"1": "OPEN",
-	"1B": "OPEN",
-	"2A": "OPEN",
-	"2B": "OPEN",
-	"3A": "OPEN",
-	"3B": "OPEN",
+	"1A": "OPEN", "1": "OPEN", "1B": "OPEN",
+	"2A": "OPEN", "2B": "OPEN",
+	"3A": "OPEN", "3B": "OPEN",
 	"4": "OPEN"
 }
 var selected_cam_id: String = "1"
@@ -68,12 +93,66 @@ var monster_hack_progress: float = 0.0
 var naomi_shield_charges: int = 1
 var mia_prediction_ready: bool = true
 
-# --- AUDIO PROCEDURAL DE LA TURBINA ---
-var music_audio_player: AudioStreamPlayer
-var music_audio_playback: AudioStreamGeneratorPlayback
-var music_audio_phase: float = 0.0
+# --- ESTADO DE LA NIÑA FANTASMA (ESTILO PHANTOM FNAF 3) ---
+var ghost_active_cam: String = ""
+var ghost_stare_timer: float = 0.0
+const GHOST_MAX_STARE_TIME: float = 1.0 # = duración del clip idle (0:00-1:00)
+var ghost_encounters_count: int = 0
+const GHOST_MAX_ENCOUNTERS: int = 3
+var ghost_forced_attack_timer: float = 0.0
+var camera_disabled_timer: float = 0.0
+var ghost_jumpscare_flash: float = 0.0
+var ghost_video_container: AspectRatioContainer
+var ghost_video_player: VideoStreamPlayer
+var ghost_stream: VideoStream
+var ghost_seek_check_timer: float = 0.0
+var ghost_video_mode: String = "" # "", "idle" o "jumpscare"
+var ghost_jumpscare_playing: bool = false
+var ghost_jumpscare_timer: float = 0.0
+var ghost_jumpscare_reason: String = ""
+const GHOST_JUMPSCARE_START: float = 1.0 # segundo donde empieza el jumpscare dentro del video
+const GHOST_VIDEO_LENGTH: float = 2.0
+var previz_ghost_root: Node3D
+var previz_ghost_head: Node3D
+var previz_screen_blackout_overlay: ColorRect
+var lbl_previz_blackout_msg: Label
 
-# --- NODOS DEL PREVIZ 3D DE CÁMARAS DE SEGURIDAD ---
+# --- AUDIO ---
+@export_file("*.mp3", "*.wav", "*.ogg") var bgm_music_path: String = "res://Music/in_game.mp3"
+@export_range(-30.0, 6.0, 0.5) var bgm_volume_db: float = 0.00
+@export_file("*.mp3", "*.wav", "*.ogg") var button_click_mp3_path: String = "res://Music/sound effects/click.mp3"
+@export_file("*.mp3", "*.wav", "*.ogg") var turbine_mp3_path: String = "res://Music/sound effects/fan.mp3"
+@export_file("*.mp3", "*.wav", "*.ogg") var alarm_mp3_path: String = "res://Music/sound effects/alarm.mp3"
+@export_file("*.mp3", "*.wav", "*.ogg") var light_mp3_path: String = "res://Music/sound effects/light.mp3"
+@export_file("*.mp3", "*.wav", "*.ogg") var ghost_laugh_mp3_path: String = "res://Music/sound effects/laugh.mp3"
+@export var is_turbine_oneshot: bool = true
+
+var sfx_click_player: AudioStreamPlayer
+var bgm_audio_player: AudioStreamPlayer
+var music_audio_player: AudioStreamPlayer
+var alarm_audio_player: AudioStreamPlayer
+var light_audio_player: AudioStreamPlayer
+var ghost_laugh_player: AudioStreamPlayer 
+var sfx_thud_player: AudioStreamPlayer
+var sfx_scare_player: AudioStreamPlayer
+var turbine_beat_timer: float = 0.0
+var alarm_beat_timer: float = 0.0
+
+# --- NODOS DEL PREVIZ 3D DE CÁMARAS ---
+var cam_pan_root: Control
+var cam_state_tex_rect: TextureRect
+var cam_door_bars_overlay: Control
+var cam_ghost_overlay: Control
+var cam_static_burst_rect: ColorRect
+var cam_lens_mat: ShaderMaterial
+var cam_static_timer: float = 0.0
+var cam_pan_time: float = 0.0 # Reloj propio del paneo: 0 = centro
+var cam_pan_last_cam_id: String = ""
+const CAM_PAN_INITIAL_HOLD: float = 2.0 # Segundos quietos en el centro antes de empezar a moverse
+var current_fnaf_state_key: String = ""
+var current_monster_stage: int = 0
+
+
 var previz_viewport: SubViewport
 var previz_cam_3d: Camera3D
 var previz_room_light: OmniLight3D
@@ -87,19 +166,18 @@ var previz_monster_head: Node3D
 var previz_walk_phase: float = 0.0
 var lbl_previz_cam_title: Label
 var lbl_previz_cam_alert: Label
-var btn_seal_door_b: Button
-var btn_seal_door_c: Button
+var btn_quick_flash: Button
 var btn_open_all_doors: Button
 
 # --- ESTADO DE VIDA Y PULSO DE LA COMPAÑERA ---
-var mia_max_lives: int = 5
-var mia_lives: int = 5
+var mia_max_lives: int = 3
+var mia_lives: int = 3
 var mia_hp_percent: int = 100
 var mia_bpm: int = 92
 var mia_pulse_phase: float = 0.0
 var mia_damage_flash: float = 0.0
 
-# --- ESTADO DEL MOTOR DE NOVELA VISUAL (VN ENGINE) ---
+# --- MOTOR VN INTERNO ---
 var vn_layer: Control
 var vn_active: bool = false
 var vn_phase: String = "intro"
@@ -131,9 +209,9 @@ var vn_btn_auto: Button
 var vn_log_modal: PanelContainer
 var vn_log_rtl: RichTextLabel
 
-# --- ESTADO DE TAB 01: TURBINA DE REFRIGERACIÓN ---
+# --- TAB 01: TURBINA (MANTENER PRESIONADO) ---
 var music_box_charge: float = 90.0
-var music_box_pulse_grace: float = 0.0
+var is_holding_turbine_btn: bool = false
 var monster_is_moving: bool = true
 var music_gear_angle: float = 0.0
 var bar_music_box: ProgressBar
@@ -142,7 +220,7 @@ var lbl_music_beast_state: Label
 var music_box_canvas: Control
 var btn_wind_music: Button
 
-# --- ESTADO DE TAB 02: LUZ DEL PASILLO + MINIJUEGO DE PERILLAS ---
+# --- TAB 02: CALIBRACIÓN DE PERILLAS Y ÓPTICA ---
 const KNOB_COUNT: int = 4
 const KNOB_MAX_STEPS: int = 8
 var knob_Target_values: Array[int] = [2, 5, 1, 6]
@@ -151,13 +229,14 @@ var knob_canvases: Array[Control] = []
 var knob_val_labels: Array[Label] = []
 var dragging_knob_index: int = -1
 
-# --- BANNER DE ALERTA VISUAL DE SISTEMAS HACKEADOS ---
+# --- BANNER DE ALERTA ---
 var hack_alert_banner: PanelContainer
 var hack_alert_style: StyleBoxFlat
 var lbl_hack_alert_banner: Label
 var btn_hack_alert_goto: Button
 
 var flash_stun_grace: float = 0.0
+var flash_cooldown: float = 0.0
 var lbl_lure_title: Label
 var lbl_lure_selected_cam: Label
 var lbl_lure_hint: Label
@@ -168,7 +247,7 @@ var btn_hallway_light: Button
 var btn_goto_reboot: Button
 var lbl_code_progress_status: Label
 
-# --- ESTADO DE TAB 03: DESBLOQUEAR PC DE LA COMPAÑERA (MATRIZ HEX) ---
+# --- TAB 03: MATRIZ HEX ---
 var hex_pool: PackedStringArray = ["1C", "55", "BD", "E9", "7A", "FF"]
 var matrix_grid: Array = []
 var matrix_buttons: Array = []
@@ -185,9 +264,12 @@ var lbl_sector: Label
 var lbl_codename: Label
 var bar_affinity: ProgressBar
 var bar_trace: ProgressBar
-var rtl_chat: RichTextLabel
+
 var tactical_map: Control
 var monitor_3d_diorama: Control
+var matrix_stream_panel: PanelContainer
+var matrix_stream_style: StyleBoxFlat
+var matrix_rain_canvas: Control
 
 var lbl_energy_val: Label
 var bar_energy: ProgressBar
@@ -220,6 +302,20 @@ var btn_reset_matrix: Button
 var lock_banner: PanelContainer
 var lbl_lock_banner: Label
 var lbl_monster_status: Label
+
+# --- BARRA DE GUÍA PARA EL JUGADOR ---
+var guide_panel: PanelContainer
+var guide_style: StyleBoxFlat
+var lbl_guide_title: Label
+var lbl_guide_text: Label
+var lbl_guide_goal: Label
+var btn_guide_action: Button
+var guide_action_tab: int = -1
+var guide_tick: float = 0.0
+var guide_level: int = 0
+var guide_focus: Array[Control] = []
+var guide_prev_focus: Array[Control] = []
+var help_dialog: AcceptDialog
 var bar_monster_hack: ProgressBar
 var lbl_perk_status: Label
 var btn_companion_perk: Button
@@ -238,15 +334,16 @@ func _ready() -> void:
 	_build_vn_stage_ui()
 	_build_death_jumpscare_modal()
 	_build_victory_modal()
+	_bind_all_tablet_button_sounds(self)
 	var vp_s: Vector2 = Vector2(get_viewport().size)
 	if vp_s.x > 100 and vp_s.y > 100:
 		size = vp_s
 
 	if available_missions.is_empty():
-		available_missions.append(_create_default_template("Mia", "ORACLE-01", Color("#f600ff"), Vector2(0.86, 0.50)))
-		available_missions.append(_create_default_template("Naomi", "AEGIS-02", Color("#00ff9d"), Vector2(0.86, 0.50)))
+		available_missions.append(_create_default_template("Mia", "ORACLE-01", Color("#f600ff")))
+		available_missions.append(_create_default_template("Naomi", "AEGIS-02", Color("#00ff9d")))
 	elif available_missions.size() == 1:
-		available_missions.append(_create_default_template("Naomi", "AEGIS-02", Color("#00ff9d"), Vector2(0.86, 0.50)))
+		available_missions.append(_create_default_template("Naomi", "AEGIS-02", Color("#00ff9d")))
 
 	_populate_mission_selector()
 	if not embedded_in_vn_engine:
@@ -278,6 +375,8 @@ func _process(delta: float) -> void:
 			mia_portrait_rect.modulate = Color(1.0, 1.0 - mia_damage_flash * 0.65, 1.0 - mia_damage_flash * 0.65, 1.0)
 
 	tactical_map.queue_redraw()
+	if is_instance_valid(matrix_rain_canvas):
+		matrix_rain_canvas.queue_redraw()
 	_update_hack_alert_visual_pulse()
 	if is_instance_valid(monitor_3d_diorama):
 		monitor_3d_diorama.queue_redraw()
@@ -287,53 +386,92 @@ func _process(delta: float) -> void:
 		death_art_canvas.queue_redraw()
 
 	if game_active and not vn_active:
+		_update_guidance(delta)
 		if flash_stun_grace > 0.0:
 			flash_stun_grace = max(0.0, flash_stun_grace - delta)
+		if flash_cooldown > 0.0:
+			flash_cooldown = max(0.0, flash_cooldown - delta)
+		if ghost_jumpscare_flash > 0.0:
+			ghost_jumpscare_flash = max(0.0, ghost_jumpscare_flash - delta * 2.5)
 
-		# --- EVENTOS DE HACKEO INDEPENDIENTES Y AL AZAR ---
-		next_light_hack_timer -= delta
-		if next_light_hack_timer <= 0.0:
-			next_light_hack_timer = randf_range(14.0, 30.0)
-			if not light_hacked_by_monster and randf() < 0.75:
-				_trigger_monster_light_knob_hack()
-				_log_chat("SISTEMA", "🎛️ ¡El monstruo hackeó las Perillas de Luz en [Tab 02]! Calibralas para poder iluminar los pasillos.", "#ffaa00")
+		# ¡ACTUALIZAR LOS 3 VIDEOS DE NAOMI / COMPAÑERA EN CADA FRAME!
+		_update_companion_left_video(delta)
+			
+		# Actualizar fase de caminata 3D cuando Subject-Zero se mueve
+		if monster_attack_active and monster_is_moving:
+			previz_walk_phase = fmod(previz_walk_phase + delta * 7.5, TAU)
 
+		# Descontar el timer del 3er encuentro inevitable con la Niña Fantasma
+		if ghost_forced_attack_timer > 0.0:
+			ghost_forced_attack_timer = max(0.0, ghost_forced_attack_timer - delta)
+			if ghost_forced_attack_timer <= 0.0:
+				_trigger_ghost_girl_jumpscare("¡3er encuentro con la Anomalía Fantasma en [C%s]!" % selected_cam_id)
+
+		# Jumpscare en video de la Niña: al terminar el clip recién se aplica el castigo
+		if ghost_seek_check_timer > 0.0:
+			ghost_seek_check_timer -= delta
+			if ghost_seek_check_timer <= 0.0 and is_instance_valid(ghost_video_player) \
+					and ghost_video_player.stream_position < GHOST_JUMPSCARE_START * 0.6:
+				push_warning("Ghost video: este formato/versión no soporta seek; el jumpscare directo arrancará desde 0:00.")
+				ghost_jumpscare_timer += GHOST_JUMPSCARE_START
+		if ghost_jumpscare_playing:
+			ghost_jumpscare_timer -= delta
+			if ghost_jumpscare_timer <= 0.0:
+				_finish_ghost_jumpscare()
+
+		# --- PROCESAR CEGUERA DE CÁMARA Y LA NIÑA FANTASMA ---
+		if camera_disabled_timer > 0.0:
+			camera_disabled_timer = max(0.0, camera_disabled_timer - delta)
+			if camera_disabled_timer <= 0.0 and not light_hacked_by_monster:
+				_refresh_lure_tab_ui()
+
+		if ghost_active_cam != "" and selected_cam_id == ghost_active_cam and camera_disabled_timer <= 0.0 and not light_hacked_by_monster and not ghost_jumpscare_playing:
+			ghost_stare_timer += delta
+			if ghost_stare_timer >= GHOST_MAX_STARE_TIME:
+				_begin_ghost_jumpscare("¡Miraste demasiado tiempo a la Anomalía Fantasma en [C%s]!" % selected_cam_id)
+		else:
+			ghost_stare_timer = max(0.0, ghost_stare_timer - delta * 2.0)
+
+		# --- EVENTOS DE SABOTAJE ---
 		next_cooling_hack_timer -= delta
 		if next_cooling_hack_timer <= 0.0:
-			next_cooling_hack_timer = randf_range(16.0, 34.0)
-			if not temp_hacked_by_monster and randf() < 0.75:
+			next_cooling_hack_timer = randf_range(18.0, 34.0)
+			if not temp_hacked_by_monster and randf() < 0.70:
 				temp_hacked_by_monster = true
+				companion_pc_unlocked = false # <-- Pone el radar y el binario en ROJO
+				_generate_breach_matrix()     # <-- Genera código en Tab 03 para repararlo
+				_refresh_lure_tab_ui()
 				mia_bpm = min(195, mia_bpm + 34)
 				_update_mia_vitals_ui()
-				var comp_n = current_mission.agent_name.to_upper()
-				_log_chat(comp_n, "«¡Ugh...! Siento que falta el aire y hace muchísimo calor acá adentro... ¡Mi pulso se está disparando, revisá la refrigeración!»", "#ff4d94")
 
 		next_pc_hack_timer -= delta
 		if next_pc_hack_timer <= 0.0:
-			next_pc_hack_timer = randf_range(18.0, 36.0)
+			next_pc_hack_timer = randf_range(20.0, 36.0)
 			if companion_pc_unlocked and monster_attack_active and randf() < 0.70:
 				companion_pc_unlocked = false
 				_generate_breach_matrix()
 				_refresh_lure_tab_ui()
-				var comp_n = current_mission.agent_name.to_upper()
-				_log_chat(comp_n, "💻 «¡Subject-Zero acaba de bloquear mi terminal! Desbloqueámela en [Tab 03] para seguir frenando su hackeo!»", "#f600ff")
 
-		# 1. PROCESAR TURBINA DE REFRIGERACIÓN (TAB 01)
-		if music_box_pulse_grace > 0.0:
-			music_box_pulse_grace = max(0.0, music_box_pulse_grace - delta)
+		# 1. PROCESAR TURBINA (MANTENER PRESIONADO PARA CARGAR)
+		if is_holding_turbine_btn and power_energy > 0.0:
+			music_box_charge = min(100.0, music_box_charge + delta * 28.0)
+			power_energy = max(0.0, power_energy - delta * 1.1)
+			if music_box_charge >= 88.0 and temp_hacked_by_monster and companion_pc_unlocked:
+				temp_hacked_by_monster = false
 		else:
-			var turb_drain: float = 1.8
+			var turb_drain: float = 2.0
 			if monster_attack_active:
-				turb_drain = 3.2
+				turb_drain = 3.1
 			if temp_hacked_by_monster:
 				turb_drain += 2.2
 			music_box_charge = max(0.0, music_box_charge - delta * turb_drain)
 
 		var turbine_working: bool = (music_box_charge >= 40.0 and power_energy > 0.0)
 		if turbine_working:
-			var gear_spd: float = 7.5 if music_box_pulse_grace > 0.0 else 3.8 * (music_box_charge / 100.0)
+			var gear_spd: float = 8.5 if is_holding_turbine_btn else 3.8 * (music_box_charge / 100.0)
 			music_gear_angle = fmod(music_gear_angle + delta * gear_spd, TAU)
-			_fill_turbine_audio_buffer()
+
+		_update_custom_turbine_audio(delta)
 
 		# 2. PROCESAR TEMPERATURA
 		var temp_rate: float = 0.0
@@ -346,15 +484,15 @@ func _process(delta: float) -> void:
 
 		bunker_temperature = clampf(bunker_temperature + delta * temp_rate, NORMAL_TEMP, CRITICAL_TEMP)
 
-		# 3. PROCESAR ENERGÍA
+		# 3. PROCESAR ENERGÍA (UNA SOLA PUERTA CONSUME BASTANTE)
 		var closed_doors_cnt: int = _count_locked_doors()
-		var energy_drain: float = float(closed_doors_cnt) * 1.45
+		var energy_drain: float = float(closed_doors_cnt) * 2.4
 		if not turbine_working:
-			energy_drain += 3.6
+			energy_drain += 3.2
 		if bunker_temperature >= 70.0:
-			energy_drain += 1.6
-		if closed_doors_cnt == 0 and turbine_working and bunker_temperature < 50.0:
-			energy_drain = -0.8
+			energy_drain += 1.5
+		if closed_doors_cnt == 0 and turbine_working and bunker_temperature < 50.0 and not is_holding_turbine_btn:
+			energy_drain = -0.9
 
 		power_energy = clampf(power_energy - delta * energy_drain, 0.0, 100.0)
 
@@ -364,9 +502,8 @@ func _process(delta: float) -> void:
 		if bunker_temperature >= CRITICAL_TEMP:
 			bunker_temperature = 75.0
 			power_energy = max(0.0, power_energy - 25.0)
-			_log_chat("ALERTA_TÉRMICA", "🔥 ¡SOBRECALENTAMIENTO (100°C)! El calor extremo drenó -25% de Energía! ¡Impulsá la Turbina en [Tab 01]!", "#ff1744")
 
-		# 4. PROCESAR ATAQUE DEL MONSTRUO, PUERTAS (0 A 10s RANDOM) Y PC COMPAÑERA
+		# 4. PROCESAR ATAQUE DE SUBJECT-ZERO (SIN SPOILERS DE PUERTA NI DE UBICACIÓN)
 		if not monster_attack_active:
 			monster_is_moving = false
 			monster_hack_progress = 0.0
@@ -381,10 +518,8 @@ func _process(delta: float) -> void:
 				bar_monster_hack.value = 0.0
 			if is_instance_valid(lbl_monster_status):
 				var err_cnt = _count_active_errors()
-				var sys_txt = ("⚠️ %d SABOTAJE(S)!" % err_cnt) if err_cnt > 0 else "✓ SISTEMAS OK"
-				lbl_monster_status.text = "👁️ %s [DESAPARECIDO // ÚLTIMO RASTRO C%s]  |  %s  |  DEFENSAS: %d/%d" % [
-					current_mission.monster_name,
-					monster_last_node_id,
+				var sys_txt = ("⚠️ %d SABOTAJE(S)!" % err_cnt) if err_cnt > 0 else "✓ FIREWALL OK"
+				lbl_monster_status.text = "👁️ CÁMARAS EN LÍNEA // %s  |  CONTENCIONES: %d/%d" % [
 					sys_txt,
 					gates_closed_by_guard,
 					TOTAL_DEFENSES_REQUIRED
@@ -400,13 +535,13 @@ func _process(delta: float) -> void:
 			if door_is_closed_on_monster:
 				monster_is_moving = false
 				if door_hold_target_time < 0.0:
-					door_hold_target_time = randf_range(1.5, 10.0)
+					door_hold_target_time = randf_range(2.5, 6.5)
 					door_hold_timer = 0.0
 				door_hold_timer += delta
 
 				if companion_pc_unlocked:
 					monster_hack_progress = max(0.0, monster_hack_progress - 6.0 * delta)
-				monster_hack_progress = min(monster_hack_progress, 90.0)
+				monster_hack_progress = min(monster_hack_progress, 92.0)
 
 				if door_hold_timer >= door_hold_target_time:
 					_on_monster_left_after_closed_door(cur_monster_node, door_hold_target_time)
@@ -416,13 +551,22 @@ func _process(delta: float) -> void:
 				door_hold_timer = 0.0
 				door_hold_target_time = -1.0
 
-				var hack_speed: float = 4.2 + float(monster_security_level) * 0.4
+				# 1. Velocidad base aumentada un +30%
+				var hack_speed: float = (4.6 + float(monster_security_level) * 0.55) * 1.30
 				if not turbine_working:
 					hack_speed += 2.2
 				if temp_hacked_by_monster:
 					hack_speed += 1.4
+				if is_holding_turbine_btn and monster_security_level >= 3:
+					hack_speed += 1.8
 
-				var companion_reduction: float = 2.2 if companion_pc_unlocked else 0.0
+				# 2. ¡EL MONSTRUO AVANZA MUCHO MÁS RÁPIDO SI TAB 02 O TAB 03 ESTÁN HACKEADAS!
+				if light_hacked_by_monster or camera_disabled_timer > 0.0:
+					hack_speed *= 1.25 # +25% de velocidad si la Niña tiró las perillas (Tab 02)
+				if not companion_pc_unlocked:
+					hack_speed *= 2.00 # +35% de velocidad si el Radar/Firewall está hackeado (Tab 03)
+
+				var companion_reduction: float = 1.8 if companion_pc_unlocked else 0.0
 				var net_delta: float = (hack_speed - companion_reduction) * delta
 				monster_hack_progress = clampf(monster_hack_progress + net_delta, 0.0, 100.0)
 
@@ -431,26 +575,36 @@ func _process(delta: float) -> void:
 			_update_terminal_lock_state()
 			if is_instance_valid(music_box_canvas):
 				music_box_canvas.queue_redraw()
+
+			var cameras_working: bool = (camera_disabled_timer <= 0.0 and not light_hacked_by_monster and companion_pc_unlocked)
+			var seeing_monster_now: bool = (selected_cam_id == cur_monster_node and cameras_working)
 			if is_instance_valid(bar_monster_hack):
-				bar_monster_hack.value = monster_hack_progress
+				bar_monster_hack.value = monster_hack_progress if seeing_monster_now else 0.0
 			if is_instance_valid(lbl_monster_status):
-				var move_state_txt = ("🚪 BLOQUEADO EN C%s (%0.1fs)" % [cur_monster_node, door_hold_timer]) if door_is_closed_on_monster else "🚨 HACKEANDO Y AVANZANDO!"
-				var comp_txt = "👩‍💻 PC COMPAÑERA: ACTIVA" if companion_pc_unlocked else "🔒 PC COMPAÑERA: BLOQUEADA"
-				var cur_node_txt = cur_monster_node if (monster_spotted_on_cam or monster_security_level >= TOTAL_SECURITY_LEVELS) else (_stage_doors_text(monster_security_level) + "?")
-				lbl_monster_status.text = "☣️ %s [%s] EN CAM %s: %d%%  |  %s  |  %d/%d" % [
-					current_mission.monster_name,
-					move_state_txt,
-					cur_node_txt,
-					int(monster_hack_progress),
-					comp_txt,
-					gates_closed_by_guard,
-					TOTAL_DEFENSES_REQUIRED
-				]
-				lbl_monster_status.modulate = Color("#00ff9d") if not monster_is_moving else Color("#ff4466")
+				var fw_txt: String = "🛡️ SISTEMA: OK" if companion_pc_unlocked else "🚨 TAB 03 HACKEADA"
+				var frenzy_tag: String = " ⚡[¡FRENESÍ: CÁMARAS CAÍDAS!]" if not cameras_working else ""
+				if seeing_monster_now:
+					lbl_monster_status.text = "☣️ ¡%s DETECTADO EN CAM C%s!%s  |  %s  |  DEFENSAS: %d/%d" % [
+						current_mission.monster_name,
+						cur_monster_node,
+						frenzy_tag,
+						fw_txt,
+						gates_closed_by_guard,
+						TOTAL_DEFENSES_REQUIRED
+					]
+					lbl_monster_status.modulate = Color("#ff1744")
+				else:
+					lbl_monster_status.text = "👁️ CÁMARAS EN LÍNEA%s  |  %s  |  CONTENCIONES: %d/%d" % [
+						frenzy_tag,
+						fw_txt,
+						gates_closed_by_guard,
+						TOTAL_DEFENSES_REQUIRED
+					]
+					lbl_monster_status.modulate = Color("#ffaa00") if (not companion_pc_unlocked or frenzy_tag != "") else Color("#00f0ff")
 			_update_3d_previz(delta)
 
 			if monster_hack_progress >= 100.0 and not door_is_closed_on_monster:
-				_on_monster_completed_hack("Subject-Zero completó el 100%% de hackeo en el pasillo abierto [C%s]!" % cur_monster_node)
+				_on_monster_completed_hack("Subject-Zero vulneró el sector [C%s]!" % cur_monster_node)
 	else:
 		_update_3d_previz(delta)
 
@@ -472,7 +626,7 @@ func _process(delta: float) -> void:
 				_on_vn_advance_pressed()
 
 # =========================================================
-# 1. CARGADOR DE MISIÓN Y FLUJO NOVELA VISUAL <-> CONSOLA
+# 1. CARGADOR DE MISIÓN Y SONIDOS PROCEDURALES
 # =========================================================
 func load_mission(data: MissionData, launch_vn_intro: bool = false) -> void:
 	current_mission = data
@@ -491,38 +645,43 @@ func load_mission(data: MissionData, launch_vn_intro: bool = false) -> void:
 	temp_hacked_by_monster = false
 	light_hacked_by_monster = false
 	companion_pc_unlocked = true
-	next_light_hack_timer = randf_range(10.0, 22.0)
-	next_cooling_hack_timer = randf_range(15.0, 28.0)
-	next_pc_hack_timer = randf_range(18.0, 32.0)
+	next_cooling_hack_timer = randf_range(16.0, 28.0)
+	next_pc_hack_timer = randf_range(18.0, 30.0)
 	door_hold_timer = 0.0
 	door_hold_target_time = -1.0
+	is_holding_turbine_btn = false
+
+	ghost_active_cam = ""
+	ghost_stare_timer = 0.0
+	ghost_encounters_count = 0
+	ghost_forced_attack_timer = 0.0
+	camera_disabled_timer = 0.0
+	ghost_jumpscare_flash = 0.0
+	_reset_ghost_video()
 
 	monster_security_level = 1
 	monster_branch = _random_branch_for_level(1)
 	monster_spotted_on_cam = false
 	monster_attack_active = false
-	monster_cooldown_timer = randf_range(3.5, 6.5)
+	monster_cooldown_timer = randf_range(3.0, 5.5)
 	monster_last_node_id = _get_monster_node_id()
 	monster_advance_on_next_wave = false
 	gates_closed_by_guard = 0
 	monster_hack_progress = 0.0
 	door_node_states = {
-		"1A": "OPEN",
-		"1": "OPEN",
-		"1B": "OPEN",
-		"2A": "OPEN",
-		"2B": "OPEN",
-		"3A": "OPEN",
-		"3B": "OPEN",
+		"1A": "OPEN", "1": "OPEN", "1B": "OPEN",
+		"2A": "OPEN", "2B": "OPEN",
+		"3A": "OPEN", "3B": "OPEN",
 		"4": "OPEN"
 	}
 	selected_cam_id = "1"
 	naomi_shield_charges = 1 if data.companion_perk == "forgive_hack" else 0
 	mia_prediction_ready = (data.companion_perk == "prediction")
 	flash_stun_grace = 0.0
+	flash_cooldown = 0.0
 
-	mia_max_lives = 5
-	mia_lives = 5
+	mia_max_lives = 3
+	mia_lives = 3
 	mia_hp_percent = 100
 	mia_bpm = 92
 	mia_damage_flash = 0.0
@@ -550,6 +709,7 @@ func load_mission(data: MissionData, launch_vn_intro: bool = false) -> void:
 	if is_instance_valid(mia_portrait_rect):
 		mia_portrait_rect.texture = chosen_tex
 		mia_portrait_rect.material = _create_portrait_crt_material(Color(0.86, 1.0, 0.94, 1.0) if is_naomi else Color(0.98, 0.88, 1.0, 1.0))
+	_setup_companion_left_video(data)
 	vn_portrait_rect.texture = data.agent_portrait
 	vn_bg_rect.texture = data.vn_background
 
@@ -569,9 +729,9 @@ func load_mission(data: MissionData, launch_vn_intro: bool = false) -> void:
 		vn_video_player.stop()
 		vn_video_player.visible = false
 
-	status_overlay.text = "● TURBINA + LUZ/PERILLAS + PC COMPAÑERA // RED 3-2-2-1"
+	status_overlay.text = "● FLASH EN CÁMARAS // ¡EVITÁ MIRAR A LA NIÑA FANTASMA!"
 	status_overlay.modulate = Color("#00ff9d")
-	lbl_sector.text = "CONTENCIÓN BÚNKER // ENERGÍA, TEMPERATURA Y CÁMARAS"
+	lbl_sector.text = "SI VES A LA NIÑA EN CÁMARA, CAMBIÁ DE CÁMARA EN <1.4s"
 	lbl_codename.text = "🔮 MIA PREDICTION" if data.companion_perk == "prediction" else "🛡️ NAOMI 1-HACK SHIELD"
 	lbl_codename.modulate = data.agent_color
 
@@ -579,12 +739,11 @@ func load_mission(data: MissionData, launch_vn_intro: bool = false) -> void:
 	tactical_map.queue_redraw()
 
 	tab_container.set_tab_title(0, "🌀 01_TURBINA")
-	tab_container.set_tab_title(1, "🎛️ 02_LUZ Y PERILLAS")
-	tab_container.set_tab_title(2, "💻 03_PC COMPAÑERA")
+	tab_container.set_tab_title(1, "🎛️ 02_ÓPTICA / PERILLAS")
+	tab_container.set_tab_title(2, "💻 03_RADAR COMPAÑERA")
 	tab_container.current_tab = 0
 
 	music_box_charge = 92.0
-	music_box_pulse_grace = 0.0
 	monster_is_moving = false
 	_sync_knobs_aligned()
 	_update_turbine_ui()
@@ -594,11 +753,10 @@ func load_mission(data: MissionData, launch_vn_intro: bool = false) -> void:
 	bar_trace.max_value = data.mission_time_seconds
 	bar_trace.value = data.mission_time_seconds
 
-	rtl_chat.clear()
-	_log_chat("SISTEMA", "Red 3-2-2-1 activa. Mantené la [01_TURBINA] >40%% para que no suba la Temperatura ni caiga la Energía.", "#00f0ff")
-	_log_chat(data.agent_name.to_upper(), "«Si prendés la Luz del Pasillo en [02_LUZ Y PERILLAS], el monstruo desaparece y tarda un tiempo impredecible en volver. Y si le cerrás su puerta, aguantá entre 0 y 10 segundos hasta que se vaya!»", "#f600ff")
-
 	_generate_breach_matrix()
+	entered_sequence = target_sequence.duplicate()
+	_refresh_matrix_ui()
+	_setup_companion_left_video(data) # <-- Ponelo acá abajo
 	_select_camera("1")
 	_update_terminal_lock_state()
 	_update_companion_perk_ui()
@@ -607,43 +765,188 @@ func load_mission(data: MissionData, launch_vn_intro: bool = false) -> void:
 	if launch_vn_intro and data.vn_intro_script.strip_edges() != "":
 		game_active = false
 		game_timer.stop()
+		if is_instance_valid(bgm_audio_player):
+			bgm_audio_player.stop()
 		start_vn_sequence(data.vn_intro_script, "intro")
 	else:
 		vn_active = false
 		vn_layer.visible = false
 		game_active = true
 		game_timer.start()
+		if is_instance_valid(bgm_audio_player) and bgm_audio_player.stream != null and not bgm_audio_player.playing:
+			bgm_audio_player.play()
 
 func _setup_turbine_audio() -> void:
-	music_audio_player = AudioStreamPlayer.new()
-	var gen = AudioStreamGenerator.new()
-	gen.mix_rate = 22050.0
-	gen.buffer_length = 0.12
-	music_audio_player.stream = gen
-	music_audio_player.volume_db = -16.0
-	add_child(music_audio_player)
-	music_audio_player.play()
-	music_audio_playback = music_audio_player.get_stream_playback() as AudioStreamGeneratorPlayback
+	
+	# --- MÚSICA IN-GAME EN LOOP ---
+	bgm_audio_player = AudioStreamPlayer.new()
+	bgm_audio_player.volume_db = bgm_volume_db
+	bgm_audio_player.finished.connect(func():
+		if game_active and is_instance_valid(bgm_audio_player):
+			bgm_audio_player.play()
+	)
+	add_child(bgm_audio_player)
 
-func _fill_turbine_audio_buffer() -> void:
+	if bgm_music_path != "" and ResourceLoader.exists(bgm_music_path):
+		var bgm_stream: AudioStream = load(bgm_music_path)
+		if bgm_stream is AudioStreamMP3 or bgm_stream is AudioStreamOggVorbis:
+			bgm_stream.loop = true
+		bgm_audio_player.stream = bgm_stream
+	
+	
+	music_audio_player = AudioStreamPlayer.new()
+	music_audio_player.volume_db = -8.0
+	add_child(music_audio_player)
+
+	if turbine_mp3_path != "" and ResourceLoader.exists(turbine_mp3_path):
+		music_audio_player.stream = load(turbine_mp3_path)
+	else:
+		music_audio_player.stream = _create_fallback_oneshot_wav("turbine")
+
+	alarm_audio_player = AudioStreamPlayer.new()
+	alarm_audio_player.volume_db = -6.0
+	add_child(alarm_audio_player)
+
+	if alarm_mp3_path != "" and ResourceLoader.exists(alarm_mp3_path):
+		alarm_audio_player.stream = load(alarm_mp3_path)
+	else:
+		alarm_audio_player.stream = _create_fallback_oneshot_wav("alarm")
+
+	light_audio_player = AudioStreamPlayer.new()
+	light_audio_player.volume_db = -4.0
+	add_child(light_audio_player)
+
+	if light_mp3_path != "" and ResourceLoader.exists(light_mp3_path):
+		light_audio_player.stream = load(light_mp3_path)
+	else:
+		light_audio_player.stream = _create_fallback_oneshot_wav("flash")
+		
+	ghost_laugh_player = AudioStreamPlayer.new()
+	ghost_laugh_player.volume_db = -2.0
+	add_child(ghost_laugh_player)
+
+	if ghost_laugh_mp3_path != "" and ResourceLoader.exists(ghost_laugh_mp3_path):
+		ghost_laugh_player.stream = load(ghost_laugh_mp3_path)
+	else:
+		ghost_laugh_player.stream = _create_fallback_oneshot_wav("scare")	
+
+	sfx_thud_player = AudioStreamPlayer.new()
+	sfx_thud_player.volume_db = 0.0
+	sfx_thud_player.stream = _create_fallback_oneshot_wav("thud")
+	add_child(sfx_thud_player)
+
+	sfx_scare_player = AudioStreamPlayer.new()
+	sfx_scare_player.volume_db = 1.0
+	sfx_scare_player.stream = _create_fallback_oneshot_wav("scare")
+	add_child(sfx_scare_player)
+	
+	sfx_click_player = AudioStreamPlayer.new()
+	sfx_click_player.volume_db = -5.0
+	sfx_click_player.max_polyphony = 4 # Permite varios clics rápidos seguidos sin cortarse
+	if button_click_mp3_path != "" and ResourceLoader.exists(button_click_mp3_path):
+		sfx_click_player.stream = load(button_click_mp3_path)
+	else:
+		sfx_click_player.stream = _create_fallback_oneshot_wav("click")
+	add_child(sfx_click_player)
+
+func _update_custom_turbine_audio(delta: float) -> void:
 	if not is_instance_valid(music_audio_player):
 		return
-	if not music_audio_player.playing:
-		music_audio_player.play()
-		music_audio_playback = music_audio_player.get_stream_playback() as AudioStreamGeneratorPlayback
-	if music_audio_playback == null:
-		return
 
-	var base_freq: float = lerpf(52.0, 115.0, clampf(music_box_charge / 100.0, 0.0, 1.0))
-	var frames_avail: int = music_audio_playback.get_frames_available()
-	var mix_rate: float = 22050.0
-	var inc: float = base_freq / mix_rate
-	for _i in range(frames_avail):
-		var hum: float = sin(music_audio_phase * TAU) * 0.55 + sin(music_audio_phase * TAU * 2.0) * 0.25
-		var air_noise: float = randf_range(-0.18, 0.18) * (music_box_charge / 100.0)
-		var sample: float = (hum + air_noise) * 0.14
-		music_audio_playback.push_frame(Vector2(sample, sample))
-		music_audio_phase = fmod(music_audio_phase + inc, 1.0)
+	var charge_norm: float = clampf(music_box_charge / 100.0, 0.0, 1.0)
+	if power_energy <= 0.0:
+		charge_norm = 0.0
+
+	if music_audio_player.stream != null and charge_norm > 0.02:
+		if is_turbine_oneshot:
+			var current_bpm: float = lerpf(25.0, 220.0, pow(charge_norm, 1.3))
+			var beat_interval: float = 60.0 / current_bpm
+			turbine_beat_timer -= delta
+			if turbine_beat_timer <= 0.0:
+				turbine_beat_timer = beat_interval
+				music_audio_player.pitch_scale = lerpf(0.45, 1.15, charge_norm) + randf_range(-0.03, 0.03)
+				music_audio_player.volume_db = lerpf(-16.0, -6.0, charge_norm)
+				music_audio_player.play()
+		else:
+			music_audio_player.pitch_scale = lerpf(0.30, 1.20, charge_norm)
+			music_audio_player.volume_db = lerpf(-18.0, -6.0, charge_norm)
+			if not music_audio_player.playing:
+				music_audio_player.play()
+	else:
+		music_audio_player.stop()
+
+	var turbine_in_red: bool = (music_box_charge < 40.0 or power_energy <= 0.0)
+	if is_instance_valid(alarm_audio_player) and alarm_audio_player.stream != null:
+		if turbine_in_red:
+			var danger: float = clampf(1.0 - (music_box_charge / 40.0), 0.0, 1.0)
+			var alarm_bpm: float = lerpf(80.0, 180.0, danger)
+			alarm_beat_timer -= delta
+			if alarm_beat_timer <= 0.0:
+				alarm_beat_timer = 60.0 / alarm_bpm
+				alarm_audio_player.pitch_scale = lerpf(0.95, 1.25, danger)
+				alarm_audio_player.play()
+		else:
+			alarm_audio_player.stop()
+			alarm_beat_timer = 0.0
+
+func _create_fallback_oneshot_wav(sound_type: String) -> AudioStreamWAV:
+	var mix_rate: int = 22050
+	var duration: float = 0.22
+	if sound_type == "thud":
+		duration = 0.38
+	elif sound_type == "scare":
+		duration = 0.55
+
+	var total_samples: int = int(mix_rate * duration)
+	var data := PackedByteArray()
+	data.resize(total_samples * 2)
+
+	for i in range(total_samples):
+		var t: float = float(i) / float(mix_rate)
+		var sig: float = 0.0
+		match sound_type:
+			"click":
+				var env: float = exp(-t * 65.0)
+				var beep: float = sin(t * 1450.0 * TAU) * 0.55 + sin(t * 2900.0 * TAU) * 0.25
+				var tick: float = randf_range(-1.0, 1.0) * exp(-t * 140.0) * 0.45
+				sig = clampf((beep + tick) * env, -1.0, 1.0) * 0.75
+			"alarm":
+				var env: float = exp(-t * 14.0)
+				var freq: float = lerpf(780.0, 520.0, t / duration)
+				sig = clampf(sin(t * freq * TAU) * 2.5, -1.0, 1.0) * env * 0.35
+			"thud":
+				# Golpe metálico grave cuando el monstruo golpea la puerta cerrada y se va
+				var env: float = exp(-t * 11.0)
+				var sub: float = sin(t * lerpf(115.0, 38.0, t / duration) * TAU) * 0.85
+				var clang: float = sin(t * 280.0 * TAU) * exp(-t * 28.0) * 0.45
+				var noise: float = randf_range(-1.0, 1.0) * exp(-t * 32.0) * 0.5
+				sig = clampf((sub + clang + noise) * env, -1.0, 1.0) * 0.85
+			"scare":
+				# Chillido de interferencia de la Niña Fantasma
+				var env: float = exp(-t * 4.5)
+				var shriek: float = sin(t * (1350.0 + sin(t * 65.0) * 420.0) * TAU) * 0.55
+				var static_n: float = randf_range(-1.0, 1.0) * 0.65
+				sig = clampf((shriek + static_n) * env, -1.0, 1.0) * 0.75
+			"flash":
+				var env: float = exp(-t * 16.0)
+				var zap: float = sin(t * lerpf(1800.0, 420.0, t / duration) * TAU) * 0.5
+				sig = (zap + randf_range(-0.4, 0.4)) * env * 0.5
+			_:
+				var env: float = exp(-t * 18.0)
+				var blade_hum: float = sin(t * 95.0 * TAU) * 0.65
+				var air_whoosh: float = randf_range(-1.0, 1.0) * 0.55
+				sig = (blade_hum + air_whoosh) * env * 0.45
+
+		var pcm16: int = clampi(int(sig * 32767.0), -32768, 32767)
+		data[i * 2] = pcm16 & 0xFF
+		data[i * 2 + 1] = (pcm16 >> 8) & 0xFF
+
+	var wav := AudioStreamWAV.new()
+	wav.format = AudioStreamWAV.FORMAT_16_BITS
+	wav.mix_rate = mix_rate
+	wav.stereo = false
+	wav.data = data
+	return wav
 
 func _start_monster_attack_wave() -> void:
 	if not game_active or not is_instance_valid(current_mission):
@@ -656,25 +959,17 @@ func _start_monster_attack_wave() -> void:
 
 	var target_node = _get_monster_node_id()
 	monster_attack_active = true
-	monster_hack_progress = randf_range(12.0, 26.0)
+	monster_hack_progress = randf_range(10.0, 22.0)
 	monster_is_moving = true
 	door_hold_timer = 0.0
 	door_hold_target_time = -1.0
 
 	if door_node_states.get(target_node, "OPEN") == "LOCKED" and power_energy > 0.0:
-		door_hold_target_time = randf_range(1.5, 10.0)
+		door_hold_target_time = randf_range(2.5, 6.5)
 		monster_is_moving = false
 
-	monster_spotted_on_cam = (monster_security_level >= TOTAL_SECURITY_LEVELS) or (selected_cam_id == target_node)
-	flash_stun_grace = 0.0
-
-	var branch_msg = " ¡Revisá las cámaras [%s] para encontrarlo!" % _stage_doors_text(monster_security_level) if _is_branching_level(monster_security_level) else " ¡Apareció en la Puerta [%s]!" % target_node
-
-	_log_chat("ALERTA_ENTIDAD", "🚨 [LA ENTIDAD REAPARECIÓ]: Subject-Zero detectado en Nivel %d!%s ¡Vigilá las cámaras y el pulso (BPM) de %s!" % [
-		monster_security_level,
-		branch_msg,
-		current_mission.agent_name
-	], "#ff4466")
+	# No se revela gratis: necesitás mirarlo con el Flash o en cámara
+	monster_spotted_on_cam = (selected_cam_id == target_node and camera_disabled_timer <= 0.0 and not light_hacked_by_monster)
 
 	_update_turbine_ui()
 	_refresh_lure_tab_ui()
@@ -739,7 +1034,7 @@ func _build_vn_stage_ui() -> void:
 	top_hbox.add_child(vn_lbl_chapter)
 
 	vn_lbl_affinity_chip = Label.new()
-	vn_lbl_affinity_chip.text = "♥ BOND: 45%"
+	vn_lbl_affinity_chip.text = "♥ BOND: 50%"
 	vn_lbl_affinity_chip.modulate = Color("#b829ff")
 	top_hbox.add_child(vn_lbl_affinity_chip)
 
@@ -781,14 +1076,6 @@ func _build_vn_stage_ui() -> void:
 	var vn_port_layer = Control.new()
 	vn_port_layer.clip_contents = true
 	vn_portrait_frame.add_child(vn_port_layer)
-
-	var vn_placeholder = Label.new()
-	vn_placeholder.text = "[ AGENT HOLOGRAM ]\n\nSprite / .ogv Video\n(Configurable in MissionData)"
-	vn_placeholder.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vn_placeholder.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	vn_placeholder.modulate = Color(0.65, 0.8, 0.95, 0.3)
-	vn_placeholder.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	vn_port_layer.add_child(vn_placeholder)
 
 	vn_portrait_rect = TextureRect.new()
 	vn_portrait_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -845,7 +1132,7 @@ func _build_vn_stage_ui() -> void:
 	var dlg_top_row = HBoxContainer.new()
 	dlg_vbox.add_child(dlg_top_row)
 
-	vn_speaker_badge = _create_badge_label("MARIA", Color("#05080d"), Color("#b829ff"))
+	vn_speaker_badge = _create_badge_label("MIA", Color("#05080d"), Color("#b829ff"))
 	dlg_top_row.add_child(vn_speaker_badge)
 
 	var spacer = Control.new()
@@ -1051,7 +1338,6 @@ func _finish_vn_sequence() -> void:
 	if vn_phase == "intro":
 		game_active = true
 		game_timer.start()
-		_log_chat("SYSTEM", "⚡ TACTICAL CONSOLE MODE ACTIVE. Trace countdown initiated.", "#00f0ff")
 	else:
 		var current_idx = available_missions.find(current_mission)
 		if current_idx >= 0 and current_idx + 1 < available_missions.size():
@@ -1087,12 +1373,11 @@ func _draw_vn_cyber_backdrop() -> void:
 		y += step
 
 # =========================================================
-# 3. CONSTRUCCIÓN DE LA CONSOLA DE OPERADOR (INDUSTRIAL GRUNGE UI)
+# 3. CONSTRUCCIÓN DE LA CONSOLA DE OPERADOR
 # =========================================================
 func _build_universal_ui() -> void:
 	clip_contents = true
 
-	# 1. FONDO Y DIORAMA 3D DEL ESCRITORIO, SIRENA ROJA, TAZA Y CARCASA "BÚNKER B7"
 	var room_bg = ColorRect.new()
 	room_bg.color = Color("#030405")
 	room_bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -1132,9 +1417,15 @@ func _build_universal_ui() -> void:
 	main_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	main_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	main_vbox.add_theme_constant_override("separation", 6)
-	screen_bezel_frame.add_child(main_vbox)
+	var root_split = HSplitContainer.new()
+	root_split.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	root_split.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	root_split.add_theme_constant_override("separation", 10)
+	screen_bezel_frame.add_child(root_split)
+	main_vbox.size_flags_stretch_ratio = 1.08
+	root_split.add_child(main_vbox)
 
-	# --- HEADER SUPERIOR ESTILO "FACILITY STATUS: CRITICAL ///" ---
+	# --- HEADER SUPERIOR ---
 	var header = _create_cyber_panel(Color("#0c0e10"), Color("#d9382e"), 2, 7)
 	main_vbox.add_child(header)
 	var header_vbox = VBoxContainer.new()
@@ -1145,52 +1436,67 @@ func _build_universal_ui() -> void:
 	header_hbox.add_theme_constant_override("separation", 8)
 	header_vbox.add_child(header_hbox)
 
+	var right_top_bar = HFlowContainer.new()
+	right_top_bar.add_theme_constant_override("h_separation", 8)
+	right_top_bar.add_theme_constant_override("v_separation", 6)
+
 	var badge = _create_badge_label("▲ FACILITY STATUS: CRITICAL", Color("#ffffff"), Color("#d9382e"))
 	header_hbox.add_child(badge)
 
 	var title = Label.new()
-	title.text = "////  TURBINA • ENERGÍA • CONTROL TÉRMICO"
+	title.text = "////  SUBJECT-ZERO + PHANTOM ANOMALY"
 	title.add_theme_font_size_override("font_size", 13)
 	title.modulate = Color("#d9382e")
 	header_hbox.add_child(title)
 
 	lbl_sector = Label.new()
-	lbl_sector.text = "MANTÉN LAS PUERTAS CERRADAS Y LA TURBINA ACTIVA"
+	lbl_sector.text = "SI VES A LA NIÑA EN CÁMARA, CAMBIÁ DE CÁMARA EN <1.4s"
 	lbl_sector.modulate = Color("#88aacc")
 	lbl_sector.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	lbl_sector.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lbl_sector.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	header_hbox.add_child(lbl_sector)
+	lbl_sector.visible = false  # UI limpia: aviso de la niña
 
 	var btn_open_vn = Button.new()
 	btn_open_vn.text = "🎭 VN INTRO"
 	_apply_styled_button(btn_open_vn, Color("#b829ff"), false)
 	btn_open_vn.pressed.connect(func(): load_mission(current_mission, true))
-	header_hbox.add_child(btn_open_vn)
+	right_top_bar.add_child(btn_open_vn)
 
 	var lbl_sel = Label.new()
 	lbl_sel.text = "COMPAÑERA:"
 	lbl_sel.modulate = Color("#88aacc")
-	header_hbox.add_child(lbl_sel)
+	right_top_bar.add_child(lbl_sel)
 
 	mission_selector = OptionButton.new()
 	mission_selector.fit_to_longest_item = false
 	mission_selector.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	mission_selector.custom_minimum_size = Vector2(155, 28)
 	mission_selector.item_selected.connect(func(idx): load_mission(available_missions[idx], start_in_vn_mode))
-	header_hbox.add_child(mission_selector)
+	right_top_bar.add_child(mission_selector)
 
 	var btn_restart = Button.new()
 	btn_restart.text = "↻ REINICIAR"
+	btn_restart.custom_minimum_size = Vector2(0, 40)
 	_apply_styled_button(btn_restart, Color("#00f0ff"), false)
 	btn_restart.pressed.connect(func(): load_mission(current_mission, false))
-	header_hbox.add_child(btn_restart)
+	right_top_bar.add_child(btn_restart)
+
+	var btn_help = Button.new()
+	btn_help.text = "❓ AYUDA"
+	btn_help.custom_minimum_size = Vector2(0, 40)
+	btn_help.tooltip_text = "Cómo se juega: qué hace cada botón y qué hacer en cada situación"
+	_apply_styled_button(btn_help, Color("#ffcc44"), false)
+	btn_help.pressed.connect(_show_help_dialog)
+	right_top_bar.add_child(btn_help)
 
 	lbl_timer = Label.new()
 	lbl_timer.text = "12:00 AM (180s)"
 	lbl_timer.add_theme_font_size_override("font_size", 15)
 	lbl_timer.modulate = Color("#00ff9d")
-	header_hbox.add_child(lbl_timer)
+	lbl_timer.add_theme_font_size_override("font_size", 18)
+	right_top_bar.add_child(lbl_timer)
 
 	bar_trace = ProgressBar.new()
 	bar_trace.custom_minimum_size = Vector2(0, 4)
@@ -1201,6 +1507,7 @@ func _build_universal_ui() -> void:
 	var monster_hbox = HBoxContainer.new()
 	monster_hbox.add_theme_constant_override("separation", 10)
 	header_vbox.add_child(monster_hbox)
+	monster_hbox.visible = false  # UI limpia: fila CÁMARAS EN LÍNEA / CONTENCIONES
 
 	lbl_monster_status = Label.new()
 	lbl_monster_status.text = "☣️ SISTEMA DE HACKEO: EN ESPERA  |  DEFENSAS: 0/5"
@@ -1234,7 +1541,7 @@ func _build_universal_ui() -> void:
 	hack_alert_banner.add_child(alert_hbox)
 
 	lbl_hack_alert_banner = Label.new()
-	lbl_hack_alert_banner.text = "🚨 ¡ALERTA DE SABOTAJE! SISTEMAS HACKEADOS POR SUBJECT-ZERO"
+	lbl_hack_alert_banner.text = "🚨 ¡ALERTA DE SABOTAJE! SISTEMAS HACKEADOS"
 	lbl_hack_alert_banner.add_theme_font_size_override("font_size", 13)
 	lbl_hack_alert_banner.modulate = Color("#ffccd5")
 	lbl_hack_alert_banner.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1243,32 +1550,90 @@ func _build_universal_ui() -> void:
 
 	btn_hack_alert_goto = Button.new()
 	btn_hack_alert_goto.text = "🛠️ IR A REPARAR >>"
-	btn_hack_alert_goto.custom_minimum_size = Vector2(150, 26)
+	btn_hack_alert_goto.custom_minimum_size = Vector2(170, 44)
 	btn_hack_alert_goto.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	_apply_styled_button(btn_hack_alert_goto, Color("#ff1744"), true)
 	btn_hack_alert_goto.pressed.connect(_on_hack_alert_goto_pressed)
 	alert_hbox.add_child(btn_hack_alert_goto)
 
-	# --- SPLIT CENTRAL ---
-	var split = HSplitContainer.new()
-	split.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	split.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	split.add_theme_constant_override("separation", 10)
-	main_vbox.add_child(split)
+	# --- BARRA DE GUÍA: SIEMPRE DICE QUÉ HACER AHORA ---
+	guide_panel = PanelContainer.new()
+	guide_style = StyleBoxFlat.new()
+	guide_style.bg_color = Color(0.04, 0.10, 0.08, 0.96)
+	guide_style.border_color = Color("#00ff9d")
+	guide_style.set_border_width_all(2)
+	guide_style.border_width_left = 6
+	guide_style.set_corner_radius_all(4)
+	guide_style.set_content_margin_all(8)
+	guide_panel.add_theme_stylebox_override("panel", guide_style)
+	guide_panel.custom_minimum_size = Vector2(0, 86)   # alto FIJO: evita que los botones de abajo se muevan
+	guide_panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	guide_panel.clip_contents = true
+	main_vbox.add_child(guide_panel)
 
-	# COLUMNA IZQUIERDA (MONITORES + ENERGÍA/TEMPERATURA + CHAT)
+	var guide_hbox = HBoxContainer.new()
+	guide_hbox.add_theme_constant_override("separation", 10)
+	guide_panel.add_child(guide_hbox)
+
+	var guide_vbox = VBoxContainer.new()
+	guide_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	guide_vbox.add_theme_constant_override("separation", 2)
+	guide_hbox.add_child(guide_vbox)
+
+	lbl_guide_title = Label.new()
+	lbl_guide_title.text = "✅ TODO ESTABLE"
+	lbl_guide_title.add_theme_font_size_override("font_size", 18)
+	lbl_guide_title.clip_text = true                    # ancho fijo: no empuja la columna
+	lbl_guide_title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	lbl_guide_title.custom_minimum_size = Vector2(0, 26)
+	guide_vbox.add_child(lbl_guide_title)
+
+	lbl_guide_text = Label.new()
+	lbl_guide_text.text = ""
+	lbl_guide_text.add_theme_font_size_override("font_size", 14)
+	lbl_guide_text.modulate = Color("#d8dfdc")
+	lbl_guide_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lbl_guide_text.custom_minimum_size = Vector2(120, 38)
+	lbl_guide_text.max_lines_visible = 2               # alto fijo: máximo 2 líneas
+	lbl_guide_text.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	guide_vbox.add_child(lbl_guide_text)
+
+	lbl_guide_goal = Label.new()
+	lbl_guide_goal.add_theme_font_size_override("font_size", 14)
+	lbl_guide_goal.modulate = Color("#b829ff")
+	lbl_guide_goal.tooltip_text = "Objetivo: contener a Subject-Zero con las compuertas / sobrevivir hasta las 6 AM"
+	lbl_guide_goal.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	lbl_guide_goal.visible = false  # UI limpia: sin contador de contenciones
+	guide_hbox.add_child(lbl_guide_goal)
+
+	btn_guide_action = Button.new()
+	btn_guide_action.custom_minimum_size = Vector2(150, 48)
+	btn_guide_action.clip_text = true
+	btn_guide_action.add_theme_font_size_override("font_size", 15)
+	btn_guide_action.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	btn_guide_action.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	_apply_styled_button(btn_guide_action, Color("#ffaa00"), true)
+	btn_guide_action.visible = false
+	btn_guide_action.pressed.connect(func():
+		if guide_action_tab >= 0 and is_instance_valid(tab_container):
+			tab_container.current_tab = guide_action_tab)
+	guide_hbox.add_child(btn_guide_action)
+
+	# --- SPLIT CENTRAL ---
+
+	# COLUMNA IZQUIERDA
 	var left_vbox = VBoxContainer.new()
 	left_vbox.clip_contents = true
 	left_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	left_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	left_vbox.size_flags_stretch_ratio = 1.05
+	left_vbox.size_flags_stretch_ratio = 1.08
 	left_vbox.add_theme_constant_override("separation", 8)
-	split.add_child(left_vbox)
+	main_vbox.add_child(left_vbox)
 
 	var monitor_panel = _create_cyber_panel(Color("#080d14"), Color("#1e3246"), 1, 8)
-	monitor_panel.custom_minimum_size = Vector2(280, 255)
+	monitor_panel.custom_minimum_size = Vector2(280, 260)
 	monitor_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	monitor_panel.size_flags_stretch_ratio = 1.4
+	monitor_panel.size_flags_stretch_ratio = 3.2
 	left_vbox.add_child(monitor_panel)
 
 	var monitor_vbox = VBoxContainer.new()
@@ -1285,7 +1650,7 @@ func _build_universal_ui() -> void:
 	monitor_top_bar.add_child(status_overlay)
 
 	lbl_codename = Label.new()
-	lbl_codename.text = "ID: VALKYRIE-01"
+	lbl_codename.text = "ID: ORACLE-01"
 	monitor_top_bar.add_child(lbl_codename)
 
 	var monitor_hbox = HBoxContainer.new()
@@ -1301,7 +1666,7 @@ func _build_universal_ui() -> void:
 	mia_portrait_border_style.set_border_width_all(2)
 	mia_portrait_border_style.set_corner_radius_all(4)
 	mia_portrait_frame.add_theme_stylebox_override("panel", mia_portrait_border_style)
-	mia_portrait_frame.custom_minimum_size = Vector2(175, 0)
+	mia_portrait_frame.custom_minimum_size = Vector2(170, 0)
 	mia_portrait_frame.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	monitor_hbox.add_child(mia_portrait_frame)
 
@@ -1323,6 +1688,29 @@ func _build_universal_ui() -> void:
 	mia_portrait_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	mia_portrait_rect.material = _create_portrait_crt_material(Color(0.98, 0.88, 1.0, 1.0))
 	mia_portrait_layer.add_child(mia_portrait_rect)
+
+	# --- REPRODUCTOR DE VIDEO DE COMPAÑERA (768x1376 SIN ESTIRAR) ---
+	var companion_video_aspect = AspectRatioContainer.new()
+	companion_video_aspect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	companion_video_aspect.ratio = 768.0 / 1376.0
+	companion_video_aspect.stretch_mode = AspectRatioContainer.STRETCH_COVER
+	companion_video_aspect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	mia_portrait_layer.add_child(companion_video_aspect)
+
+	companion_video_player = VideoStreamPlayer.new()
+	companion_video_player.expand = true
+	companion_video_player.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	companion_video_player.visible = false
+	companion_video_player.finished.connect(_on_companion_video_finished)
+	companion_video_aspect.add_child(companion_video_player)
+
+	# --- NUEVO: ESTÁTICA DE TRANSICIÓN AL HACKEAR / REPARAR TERMINAL ---
+	companion_static_burst_rect = ColorRect.new()
+	companion_static_burst_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	companion_static_burst_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	companion_static_burst_rect.material = _create_fnaf_static_burst_material()
+	companion_static_burst_rect.visible = false
+	mia_portrait_layer.add_child(companion_static_burst_rect)
 
 	var mia_crt_overlay = _create_portrait_crt_overlay(Color(0.96, 0.0, 1.0, 1.0))
 	mia_portrait_layer.add_child(mia_crt_overlay)
@@ -1353,8 +1741,8 @@ func _build_universal_ui() -> void:
 	mia_hdr_hbox.add_child(lbl_mia_header)
 
 	lbl_mia_hearts = Label.new()
-	lbl_mia_hearts.text = "♥♥♥♥♥"
-	lbl_mia_hearts.add_theme_font_size_override("font_size", 10)
+	lbl_mia_hearts.text = "♥♥♥"
+	lbl_mia_hearts.add_theme_font_size_override("font_size", 11)
 	lbl_mia_hearts.modulate = Color("#ff1744")
 	lbl_mia_hearts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	lbl_mia_hearts.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
@@ -1402,11 +1790,11 @@ func _build_universal_ui() -> void:
 	mia_ecg_graph.draw.connect(_draw_mia_ecg_wave)
 	mia_bpm_hbox.add_child(mia_ecg_graph)
 
-	# --- MONITOR PREVIZ 3D DE CÁMARA DE SEGURIDAD ---
+	# --- MONITOR PREVIZ 3D DE CÁMARA DE SEGURIDAD +NIÑA FANTASMA ---
 	var previz_3d_panel = _build_3d_camera_previz()
 	monitor_hbox.add_child(previz_3d_panel)
 
-	# --- MAPA INTERACTIVO 3 - 2 - 2 - 1 DE CÁMARAS Y PUERTAS ---
+	# --- MAPA INTERACTIVO 3 - 2 - 2 - 1 ---
 	var map_frame = _create_cyber_panel(Color("#050910"), Color("#192a3c"), 1, 4)
 	map_frame.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	map_frame.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -1421,12 +1809,13 @@ func _build_universal_ui() -> void:
 	tactical_map.gui_input.connect(_on_tactical_map_gui_input)
 	map_frame.add_child(tactical_map)
 
+	# BARRA DE CÁMARAS + BOTÓN RÁPIDO DE FLASH EN EL MONITOR
 	var cam_bar_hbox = HBoxContainer.new()
-	cam_bar_hbox.add_theme_constant_override("separation", 5)
+	cam_bar_hbox.add_theme_constant_override("separation", 4)
 	monitor_vbox.add_child(cam_bar_hbox)
 
 	var lbl_cam_bar = Label.new()
-	lbl_cam_bar.text = "🎥 CÁMARAS DEL BÚNKER:"
+	lbl_cam_bar.text = "🎥 CAM:"
 	lbl_cam_bar.add_theme_font_size_override("font_size", 11)
 	lbl_cam_bar.modulate = Color("#88ccee")
 	cam_bar_hbox.add_child(lbl_cam_bar)
@@ -1435,7 +1824,8 @@ func _build_universal_ui() -> void:
 	for cam_id in CAM_NODE_IDS:
 		var c_btn = Button.new()
 		c_btn.text = "C" + cam_id
-		c_btn.custom_minimum_size = Vector2(0, 26)
+		c_btn.custom_minimum_size = Vector2(0, 46)
+		c_btn.add_theme_font_size_override("font_size", 15)
 		c_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		c_btn.clip_text = true
 		c_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -1443,62 +1833,122 @@ func _build_universal_ui() -> void:
 		cam_bar_hbox.add_child(c_btn)
 		cam_select_buttons[cam_id] = c_btn
 
-	# --- PANEL DE ENERGÍA, TEMPERATURA Y SISTEMA DE HACKEO ---
-	var bio_panel = _create_cyber_panel(Color("#0a1018"), Color("#1c2d3f"), 1, 8)
+	btn_quick_flash = Button.new()
+	btn_quick_flash.text = "🔦 FLASH (-6%⚡)"
+	btn_quick_flash.custom_minimum_size = Vector2(150, 46)
+	btn_quick_flash.add_theme_font_size_override("font_size", 15)
+	btn_quick_flash.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	_apply_styled_button(btn_quick_flash, Color("#00ff9d"), true)
+	btn_quick_flash.pressed.connect(_on_hallway_light_pressed)
+	btn_quick_flash.tooltip_text = "Ahuyenta a Subject-Zero en C1–C3. En C4 solo lo frena. ¡NUNCA en la cámara de la Niña!"
+	cam_bar_hbox.add_child(btn_quick_flash)
+
+	# --- PANEL INFERIOR: ENERGÍA + TEMPERATURA ---
+	var bio_panel = _create_cyber_panel(Color("#0a1018"), Color("#1c2d3f"), 2, 12)
+	bio_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	bio_panel.size_flags_stretch_ratio = 1.0
 	left_vbox.add_child(bio_panel)
+
+	matrix_stream_panel = PanelContainer.new()
+	matrix_stream_style = StyleBoxFlat.new()
+	matrix_stream_style.bg_color = Color(0.02, 0.05, 0.04, 0.96)
+	matrix_stream_style.border_color = Color("#00ff9d")
+	matrix_stream_style.set_border_width_all(1)
+	matrix_stream_style.border_width_top = 2
+	matrix_stream_style.set_corner_radius_all(3)
+	matrix_stream_style.set_content_margin_all(6)
+	matrix_stream_panel.add_theme_stylebox_override("panel", matrix_stream_style)
+	matrix_stream_panel.custom_minimum_size = Vector2(0, 90)
+	matrix_stream_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	matrix_stream_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	matrix_stream_panel.size_flags_stretch_ratio = 0.68
+	matrix_stream_panel.clip_contents = true
+	left_vbox.add_child(matrix_stream_panel)
+
+	matrix_rain_canvas = Control.new()
+	matrix_rain_canvas.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	matrix_rain_canvas.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	matrix_rain_canvas.clip_contents = true
+	matrix_rain_canvas.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	matrix_rain_canvas.draw.connect(_draw_companion_matrix_stream)
+	matrix_rain_canvas.gui_input.connect(func(ev):
+		if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+			var matrix_pending: bool = (target_sequence.size() > 0 and entered_sequence.size() < target_sequence.size())
+			if (not companion_pc_unlocked or temp_hacked_by_monster or matrix_pending) and is_instance_valid(tab_container):
+				tab_container.current_tab = 2
+	)
+	matrix_stream_panel.add_child(matrix_rain_canvas)
+
 	var bio_vbox = VBoxContainer.new()
-	bio_vbox.add_theme_constant_override("separation", 6)
+	bio_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bio_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	bio_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	bio_vbox.add_theme_constant_override("separation", 10)
 	bio_panel.add_child(bio_vbox)
 
 	var gauges_hbox = HBoxContainer.new()
-	gauges_hbox.add_theme_constant_override("separation", 14)
+	gauges_hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	gauges_hbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	gauges_hbox.add_theme_constant_override("separation", 12)
 	bio_vbox.add_child(gauges_hbox)
 
+	var nrg_card = _create_cyber_panel(Color("#070c12"), Color("#2bbd7e"), 2, 10)
+	nrg_card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	nrg_card.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	gauges_hbox.add_child(nrg_card)
+
 	var nrg_vbox = VBoxContainer.new()
-	nrg_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	nrg_vbox.add_theme_constant_override("separation", 3)
-	gauges_hbox.add_child(nrg_vbox)
+	nrg_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	nrg_vbox.add_theme_constant_override("separation", 6)
+	nrg_card.add_child(nrg_vbox)
 
 	var nrg_top = HBoxContainer.new()
 	nrg_vbox.add_child(nrg_top)
+
 	var lbl_nrg_title = Label.new()
-	lbl_nrg_title.text = "⚡ ENERGÍA"
-	lbl_nrg_title.add_theme_font_size_override("font_size", 12)
+	lbl_nrg_title.text = "⚡ ENERGÍA RESTANTE"
+	lbl_nrg_title.add_theme_font_size_override("font_size", 13)
 	lbl_nrg_title.modulate = Color("#aaddff")
 	lbl_nrg_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	nrg_top.add_child(lbl_nrg_title)
 
 	lbl_energy_val = Label.new()
 	lbl_energy_val.text = "100%"
-	lbl_energy_val.add_theme_font_size_override("font_size", 13)
+	lbl_energy_val.add_theme_font_size_override("font_size", 22)
 	lbl_energy_val.modulate = Color("#00ff9d")
 	nrg_top.add_child(lbl_energy_val)
 
 	bar_energy = ProgressBar.new()
 	bar_energy.max_value = 100.0
 	bar_energy.value = 100.0
-	bar_energy.custom_minimum_size = Vector2(0, 8)
+	bar_energy.custom_minimum_size = Vector2(0, 18)
 	bar_energy.show_percentage = false
 	_style_progress_bar(bar_energy, Color("#101b24"), Color("#00ff9d"))
 	nrg_vbox.add_child(bar_energy)
 
+	var tmp_card = _create_cyber_panel(Color("#070c12"), Color("#00f0ff"), 2, 10)
+	tmp_card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tmp_card.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	gauges_hbox.add_child(tmp_card)
+
 	var tmp_vbox = VBoxContainer.new()
-	tmp_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	tmp_vbox.add_theme_constant_override("separation", 3)
-	gauges_hbox.add_child(tmp_vbox)
+	tmp_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	tmp_vbox.add_theme_constant_override("separation", 6)
+	tmp_card.add_child(tmp_vbox)
 
 	var tmp_top = HBoxContainer.new()
 	tmp_vbox.add_child(tmp_top)
+
 	var lbl_tmp_title = Label.new()
-	lbl_tmp_title.text = "🌡️ TEMPERATURA"
-	lbl_tmp_title.add_theme_font_size_override("font_size", 12)
+	lbl_tmp_title.text = "🌡️ TEMPERATURA SALA"
+	lbl_tmp_title.add_theme_font_size_override("font_size", 13)
 	lbl_tmp_title.modulate = Color("#aaddff")
 	lbl_tmp_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	tmp_top.add_child(lbl_tmp_title)
 
 	lbl_temp_val = Label.new()
 	lbl_temp_val.text = "24°C"
-	lbl_temp_val.add_theme_font_size_override("font_size", 13)
+	lbl_temp_val.add_theme_font_size_override("font_size", 22)
 	lbl_temp_val.modulate = Color("#00f0ff")
 	tmp_top.add_child(lbl_temp_val)
 
@@ -1506,7 +1956,7 @@ func _build_universal_ui() -> void:
 	bar_temperature.min_value = 20.0
 	bar_temperature.max_value = 100.0
 	bar_temperature.value = 24.0
-	bar_temperature.custom_minimum_size = Vector2(0, 8)
+	bar_temperature.custom_minimum_size = Vector2(0, 18)
 	bar_temperature.show_percentage = false
 	_style_progress_bar(bar_temperature, Color("#101b24"), Color("#00f0ff"))
 	tmp_vbox.add_child(bar_temperature)
@@ -1517,74 +1967,68 @@ func _build_universal_ui() -> void:
 
 	lbl_affinity = Label.new()
 	lbl_affinity.modulate = Color("#00f0ff")
-	lbl_affinity.add_theme_font_size_override("font_size", 11)
+	lbl_affinity.add_theme_font_size_override("font_size", 12)
 	lbl_affinity.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	lbl_affinity.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	bio_header.add_child(lbl_affinity)
 
 	lbl_companion_hack_status = Label.new()
-	lbl_companion_hack_status.text = "👩‍💻 PC COMPAÑERA: ACTIVA"
-	lbl_companion_hack_status.add_theme_font_size_override("font_size", 11)
+	lbl_companion_hack_status.text = "👩‍💻 RADAR: ACTIVO"
+	lbl_companion_hack_status.add_theme_font_size_override("font_size", 12)
 	lbl_companion_hack_status.modulate = Color("#00ff9d")
 	bio_header.add_child(lbl_companion_hack_status)
 
 	lbl_perk_status = Label.new()
 	lbl_perk_status.text = "🔮 PERK LISTO"
-	lbl_perk_status.add_theme_font_size_override("font_size", 11)
+	lbl_perk_status.add_theme_font_size_override("font_size", 12)
 	lbl_perk_status.modulate = Color("#f600ff")
 	bio_header.add_child(lbl_perk_status)
 
 	bar_affinity = ProgressBar.new()
 	bar_affinity.max_value = 100
-	bar_affinity.custom_minimum_size = Vector2(0, 4)
+	bar_affinity.custom_minimum_size = Vector2(0, 5)
 	bar_affinity.show_percentage = false
 	_style_progress_bar(bar_affinity, Color("#121d2b"), Color("#00f0ff"))
 	bio_vbox.add_child(bar_affinity)
 
+	var bottom_actions_hbox = HBoxContainer.new()
+	bottom_actions_hbox.add_theme_constant_override("separation", 8)
+	bio_vbox.add_child(bottom_actions_hbox)
+
 	btn_companion_perk = Button.new()
 	btn_companion_perk.text = "🔮 USAR HABILIDAD DE COMPAÑERA"
-	btn_companion_perk.custom_minimum_size = Vector2(0, 28)
+	btn_companion_perk.custom_minimum_size = Vector2(0, 58)
+	btn_companion_perk.add_theme_font_size_override("font_size", 16)
 	btn_companion_perk.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	btn_companion_perk.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	btn_companion_perk.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	_apply_styled_button(btn_companion_perk, Color("#f600ff"), true)
 	btn_companion_perk.pressed.connect(_on_companion_perk_pressed)
-	bio_vbox.add_child(btn_companion_perk)
-
-	# --- CHAT / LOG ---
-	var chat_panel = _create_cyber_panel(Color("#090e16"), Color("#1e2d3d"), 1, 8)
-	chat_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	chat_panel.size_flags_stretch_ratio = 0.80
-	left_vbox.add_child(chat_panel)
-
-	var chat_vbox = VBoxContainer.new()
-	chat_vbox.add_theme_constant_override("separation", 4)
-	chat_panel.add_child(chat_vbox)
-
-	rtl_chat = RichTextLabel.new()
-	rtl_chat.bbcode_enabled = true
-	rtl_chat.scroll_following = true
-	rtl_chat.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	rtl_chat.add_theme_constant_override("line_separation", 2)
-	chat_vbox.add_child(rtl_chat)
+	bottom_actions_hbox.add_child(btn_companion_perk)
 
 	btn_continue_vn = Button.new()
 	btn_continue_vn.text = "🎭 VER EPÍLOGO (NOVELA VISUAL) >>"
-	btn_continue_vn.custom_minimum_size = Vector2(0, 34)
+	btn_continue_vn.custom_minimum_size = Vector2(0, 52)
 	btn_continue_vn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	_apply_styled_button(btn_continue_vn, Color("#00ff9d"), true)
 	btn_continue_vn.visible = false
 	btn_continue_vn.pressed.connect(_launch_outro_vn)
-	chat_vbox.add_child(btn_continue_vn)
+	bio_vbox.add_child(btn_continue_vn)
 
-	# COLUMNA DERECHA (3 TABS: TURBINA + LUZ/PERILLAS + PC COMPAÑERA + PUERTAS)
+	# COLUMNA DERECHA
 	var right_vbox = VBoxContainer.new()
 	right_vbox.clip_contents = true
 	right_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	right_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	right_vbox.size_flags_stretch_ratio = 0.95
+	right_vbox.size_flags_stretch_ratio = 0.92
 	right_vbox.add_theme_constant_override("separation", 8)
-	split.add_child(right_vbox)
+	root_split.add_child(right_vbox)
+
+	# Barra superior de la columna derecha: reloj, compañera, reiniciar, ayuda
+	var right_top_panel = _create_cyber_panel(Color("#0c0e10"), Color("#2c3235"), 1, 6)
+	right_vbox.add_child(right_top_panel)
+	right_top_panel.add_child(right_top_bar)
+	right_top_bar.move_child(lbl_timer, 0)
 
 	tab_container = TabContainer.new()
 	tab_container.clip_contents = true
@@ -1597,7 +2041,7 @@ func _build_universal_ui() -> void:
 	tab_container.add_child(_build_light_and_knobs_tab())
 	tab_container.add_child(_build_hacking_minigame_tab())
 
-	# PANEL DE CONTROL DE PUERTAS CON CONSUMO DE ENERGÍA
+	# PANEL DE CONTROL DE PUERTA BLINDADA (MÁXIMO 1 ACTIVA A LA VEZ)
 	var term_panel = _create_cyber_panel(Color("#0c131f"), Color("#00f0ff"), 2, 10)
 	term_panel.clip_contents = true
 	right_vbox.add_child(term_panel)
@@ -1609,25 +2053,27 @@ func _build_universal_ui() -> void:
 	var term_header_hbox = HBoxContainer.new()
 	term_header_hbox.add_theme_constant_override("separation", 8)
 	term_vbox.add_child(term_header_hbox)
+	term_header_hbox.visible = false  # UI limpia: título COMPUERTA MAGNÉTICA
 
 	var lbl_term = Label.new()
-	lbl_term.text = "🚪 CONTROL DE PUERTAS (SE VA EN 0-10s RANDOM // CONSUME ⚡)"
+	lbl_term.text = "🚪 COMPUERTA MAGNÉTICA (1 SOLA ACTIVA A LA VEZ // ESCUCHÁ EL GOLPE)"
 	lbl_term.modulate = Color("#00f0ff")
 	lbl_term.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	lbl_term.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	term_header_hbox.add_child(lbl_term)
 
 	lbl_code_progress_status = Label.new()
-	lbl_code_progress_status.text = "PUERTAS CERRADAS: 0"
+	lbl_code_progress_status.text = "PUERTA: ABIERTA"
 	lbl_code_progress_status.modulate = Color("#00ff9d")
 	lbl_code_progress_status.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	term_header_hbox.add_child(lbl_code_progress_status)
 
 	lock_banner = _create_cyber_panel(Color("#1b111c"), Color("#ffaa00"), 1, 5)
 	term_vbox.add_child(lock_banner)
+	lock_banner.visible = false  # UI limpia: texto de ayuda de la compuerta
 
 	lbl_lock_banner = Label.new()
-	lbl_lock_banner.text = "Cerrá la puerta del pasillo donde esté el monstruo: tardará entre 0 y 10 segundos aleatorios en irse mientras mantengas la puerta cerrada con Energía."
+	lbl_lock_banner.text = "En C1..C3 usá el [🔦 FLASH] para ahuyentar a Subject-Zero. Cuando llegue a C4 (o esté por romper tu pasillo), cerrá su compuerta y esperá a escuchar el golpe metálico."
 	lbl_lock_banner.modulate = Color("#ffcc44")
 	lbl_lock_banner.add_theme_font_size_override("font_size", 11)
 	lbl_lock_banner.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1639,42 +2085,33 @@ func _build_universal_ui() -> void:
 	term_vbox.add_child(hbox_btns)
 
 	btn_inject = Button.new()
-	btn_inject.custom_minimum_size = Vector2(0, 40)
+	btn_inject.custom_minimum_size = Vector2(0, 64)
+	btn_inject.add_theme_font_size_override("font_size", 18)
 	btn_inject.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	btn_inject.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	btn_inject.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	_apply_styled_button(btn_inject, Color("#00f0ff"), true)
-	btn_inject.pressed.connect(func(): _on_seal_door_choice_pressed("A"))
+	btn_inject.pressed.connect(_on_seal_door_choice_pressed)
+	btn_inject.tooltip_text = "Cierra/abre la compuerta de la cámara elegida. Solo 1 a la vez y gasta energía."
 	hbox_btns.add_child(btn_inject)
 
-	btn_seal_door_b = Button.new()
-	btn_seal_door_b.custom_minimum_size = Vector2(0, 40)
-	btn_seal_door_b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btn_seal_door_b.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	btn_seal_door_b.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	_apply_styled_button(btn_seal_door_b, Color("#00ff9d"), true)
-	btn_seal_door_b.visible = false
-	btn_seal_door_b.pressed.connect(func(): _on_seal_door_choice_pressed("B"))
-	hbox_btns.add_child(btn_seal_door_b)
-
-	btn_seal_door_c = Button.new()
-	btn_seal_door_c.custom_minimum_size = Vector2(0, 40)
-	btn_seal_door_c.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btn_seal_door_c.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	btn_seal_door_c.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	_apply_styled_button(btn_seal_door_c, Color("#ffcc00"), true)
-	btn_seal_door_c.visible = false
-	btn_seal_door_c.pressed.connect(func(): _on_seal_door_choice_pressed("C"))
-	hbox_btns.add_child(btn_seal_door_c)
-
 	btn_open_all_doors = Button.new()
-	btn_open_all_doors.text = "🔓 ABRIR TODAS (AHORRAR ⚡)"
-	btn_open_all_doors.custom_minimum_size = Vector2(130, 40)
+	btn_open_all_doors.text = "🔓 ABRIR PUERTA (AHORRAR ⚡)"
+	btn_open_all_doors.custom_minimum_size = Vector2(145, 40)
 	btn_open_all_doors.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	btn_open_all_doors.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	_apply_styled_button(btn_open_all_doors, Color("#ffaa00"), false)
 	btn_open_all_doors.pressed.connect(_on_open_all_doors_pressed)
 	hbox_btns.add_child(btn_open_all_doors)
+	btn_open_all_doors.visible = false  # el botón principal ya alterna CERRAR/ABRIR
+
+	# UI limpia: etiqueta de compañera, fila de vínculo/radar/rastreo y su barra
+	if is_instance_valid(lbl_codename):
+		lbl_codename.visible = false
+	if is_instance_valid(lbl_affinity) and lbl_affinity.get_parent():
+		lbl_affinity.get_parent().visible = false
+	if is_instance_valid(bar_affinity):
+		bar_affinity.visible = false
 
 	game_timer = Timer.new()
 	game_timer.wait_time = 1.0
@@ -1682,7 +2119,7 @@ func _build_universal_ui() -> void:
 	add_child(game_timer)
 
 # =========================================================
-# 4A. TAB 01: TURBINA DE VENTILACIÓN Y TEMPERATURA
+# 4A. TAB 01: TURBINA (MANTENER PRESIONADO CON RIESGO DE RUIDO)
 # =========================================================
 func _build_turbine_tab() -> Control:
 	var wrapper = _create_doc_tab_wrapper()
@@ -1696,7 +2133,7 @@ func _build_turbine_tab() -> Control:
 	vbox.add_child(top_hbox)
 
 	var lbl_mb_title = Label.new()
-	lbl_mb_title.text = "🌀 TURBINA DE REFRIGERACIÓN CENTRAL // CONTROL TÉRMICO"
+	lbl_mb_title.text = "🌀 TURBINA DE REFRIGERACIÓN (MANTENER PRESIONADO)"
 	lbl_mb_title.modulate = Color("#00f0ff")
 	lbl_mb_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	lbl_mb_title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
@@ -1708,9 +2145,9 @@ func _build_turbine_tab() -> Control:
 	top_hbox.add_child(lbl_music_status)
 
 	var lbl_desc = Label.new()
-	lbl_desc.text = "¡Mantené la Turbina por encima del 40%! Si deja de funcionar (o si el monstruo hackea la refrigeración y ves que el BPM de tu compañera se dispara), la TEMPERATURA sube hasta 100°C y la ENERGÍA cae rápido."
+	lbl_desc.text = "• MANTENÉ APRETADO el botón de abajo para dar cuerda a la turbina (>40%).\n• ¡CUIDADO!: Si el búnker pasa de 45°C, la Niña Fantasma aparece mucho más seguido en las cámaras. Y si acelerás la turbina cuando Subject-Zero está en Nivel 3 o 4, el ruido lo atrae más rápido."
 	lbl_desc.modulate = Color("#99badd")
-	lbl_desc.add_theme_font_size_override("font_size", 12)
+	lbl_desc.add_theme_font_size_override("font_size", 11)
 	lbl_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(lbl_desc)
 
@@ -1725,7 +2162,7 @@ func _build_turbine_tab() -> Control:
 	lbl_music_beast_state = Label.new()
 	lbl_music_beast_state.text = "🌀 TURBINA ESTABLE — TEMPERATURA Y ENERGÍA CONTROLADAS"
 	lbl_music_beast_state.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl_music_beast_state.add_theme_font_size_override("font_size", 14)
+	lbl_music_beast_state.add_theme_font_size_override("font_size", 13)
 	lbl_music_beast_state.modulate = Color("#00ff9d")
 	lbl_music_beast_state.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	vbox.add_child(lbl_music_beast_state)
@@ -1742,20 +2179,25 @@ func _build_turbine_tab() -> Control:
 	canvas_frame.add_child(music_box_canvas)
 
 	btn_wind_music = Button.new()
-	btn_wind_music.text = "🌀 IMPULSAR TURBINA DE VENTILACIÓN (+22% RPM)"
-	btn_wind_music.custom_minimum_size = Vector2(0, 52)
+	btn_wind_music.text = "🌀 MANTENER APRETADO PARA ACELERAR TURBINA (+28% RPM/s)"
+	btn_wind_music.custom_minimum_size = Vector2(0, 76)
+	btn_wind_music.add_theme_font_size_override("font_size", 17)
 	btn_wind_music.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	btn_wind_music.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	_apply_styled_button(btn_wind_music, Color("#00ff9d"), true)
-	btn_wind_music.pressed.connect(_on_wind_turbine_pressed)
+	btn_wind_music.tooltip_text = "Mantené apretado para subir la turbina. Debajo de 40% la sala se calienta."
+	btn_wind_music.button_down.connect(func(): is_holding_turbine_btn = true)
+	btn_wind_music.button_up.connect(func(): is_holding_turbine_btn = false)
+	btn_wind_music.mouse_exited.connect(func(): is_holding_turbine_btn = false)
 	vbox.add_child(btn_wind_music)
 
 	var nav_hbox = HBoxContainer.new()
 	nav_hbox.add_theme_constant_override("separation", 10)
+	nav_hbox.visible = false  # UI limpia: botones IR A ÓPTICA / DESBLOQUEAR RADAR
 	vbox.add_child(nav_hbox)
 
 	var btn_to_tab2 = Button.new()
-	btn_to_tab2.text = "🎛️ IR A LUZ Y PERILLAS [TAB 02] >>"
+	btn_to_tab2.text = "🎛️ IR A ÓPTICA Y PERILLAS [TAB 02] >>"
 	btn_to_tab2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	btn_to_tab2.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_apply_styled_button(btn_to_tab2, Color("#00f0ff"), false)
@@ -1763,7 +2205,7 @@ func _build_turbine_tab() -> Control:
 	nav_hbox.add_child(btn_to_tab2)
 
 	var btn_to_tab3 = Button.new()
-	btn_to_tab3.text = "💻 DESBLOQUEAR PC COMPAÑERA [TAB 03] >>"
+	btn_to_tab3.text = "💻 DESBLOQUEAR RADAR [TAB 03] >>"
 	btn_to_tab3.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	btn_to_tab3.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_apply_styled_button(btn_to_tab3, Color("#f600ff"), false)
@@ -1772,42 +2214,29 @@ func _build_turbine_tab() -> Control:
 
 	return wrapper
 
-func _on_wind_turbine_pressed() -> void:
-	if not game_active:
-		return
-	if power_energy <= 0.0:
-		_log_chat("SISTEMA", "⚠️ ¡Sin energía eléctrica! Abrí puertas cerradas para recuperar el generador auxiliar.", "#ff1744")
-		return
-	music_box_charge = min(100.0, music_box_charge + 22.0)
-	music_box_pulse_grace = 1.8
-	if music_box_charge >= 85.0 and temp_hacked_by_monster and companion_pc_unlocked:
-		temp_hacked_by_monster = false
-		_log_chat("SISTEMA", "🌀 Turbina al máximo + PC de compañera activa: ¡Sabotaje térmico purgado!", "#00ff9d")
-	_update_turbine_ui()
-	_refresh_lure_tab_ui()
-	if is_instance_valid(music_box_canvas):
-		music_box_canvas.queue_redraw()
-
 func _update_turbine_ui() -> void:
 	if is_instance_valid(bar_music_box):
 		bar_music_box.value = music_box_charge
 
 	var turbine_ok: bool = (music_box_charge >= 40.0 and power_energy > 0.0)
 	if is_instance_valid(lbl_music_status):
-		lbl_music_status.text = ("🌀 ACTIVA: %d%%" % int(music_box_charge)) if turbine_ok else ("🚨 DETENIDA (<40%%): %d%%" % int(music_box_charge))
+		lbl_music_status.text = ("🌀 ACTIVA: %d%%" % int(music_box_charge)) if turbine_ok else ("🚨 CAÍDA (<40%%): %d%%" % int(music_box_charge))
 		lbl_music_status.modulate = Color("#00ff9d") if turbine_ok else Color("#ff1744")
 
 	if is_instance_valid(lbl_music_beast_state):
-		if not turbine_ok:
-			lbl_music_beast_state.text = "🚨 ¡TURBINA PARADA! TEMPERATURA SUBIENDO (%d°C) Y ENERGÍA CAYENDO RÁPIDO!" % int(bunker_temperature)
+		if is_holding_turbine_btn:
+			lbl_music_beast_state.text = "⚡ ACELERANDO TURBINA (%d%%)... ¡CUIDADO CON EL RUIDO SI ESTÁ CERCA!" % int(music_box_charge)
+			lbl_music_beast_state.modulate = Color("#00f0ff")
+		elif not turbine_ok:
+			lbl_music_beast_state.text = "🚨 ¡TURBINA PARADA! CALOR SUBIENDO (%d°C) Y APARICIONES FANTASMA ACTIVAS!" % int(bunker_temperature)
 			lbl_music_beast_state.modulate = Color("#ff1744")
 		else:
 			lbl_music_beast_state.text = "🌀 TURBINA REFRIGERANDO (%d%%) — TEMP: %d°C  |  ENERGÍA: %d%%" % [int(music_box_charge), int(bunker_temperature), int(power_energy)]
 			lbl_music_beast_state.modulate = Color("#00ff9d")
 
 	if is_instance_valid(btn_wind_music):
-		btn_wind_music.text = "🌀 IMPULSAR TURBINA (+22% RPM — MANTENER ARRIBA DE 40%)"
-		_apply_styled_button(btn_wind_music, Color("#00ff9d") if turbine_ok else Color("#ff1744"), true)
+		btn_wind_music.text = "⚡ CARGANDO TURBINA... (SOLTÁ PARA SILENCIAR)" if is_holding_turbine_btn else "🌀 MANTENER APRETADO PARA IMPULSAR TURBINA (>40%)"
+		_apply_styled_button(btn_wind_music, Color("#00f0ff") if is_holding_turbine_btn else (Color("#00ff9d") if turbine_ok else Color("#ff1744")), true)
 
 func _draw_turbine_device() -> void:
 	if not is_instance_valid(music_box_canvas):
@@ -1819,7 +2248,7 @@ func _draw_turbine_device() -> void:
 	var center = Vector2(s.x * 0.24, s.y * 0.5)
 	var radius = min(s.x * 0.17, s.y * 0.38)
 	var turbine_ok = (music_box_charge >= 40.0 and power_energy > 0.0)
-	var col = Color("#00ff9d") if turbine_ok else Color("#ff1744")
+	var col = Color("#00f0ff") if is_holding_turbine_btn else (Color("#00ff9d") if turbine_ok else Color("#ff1744"))
 
 	music_box_canvas.draw_circle(center, radius, Color(col.r, col.g, col.b, 0.12))
 	music_box_canvas.draw_arc(center, radius, 0, TAU, 36, col, 2.8)
@@ -1848,7 +2277,7 @@ func _draw_turbine_device() -> void:
 	music_box_canvas.draw_string(font, Vector2(wave_start_x, 22), state_str, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, col)
 
 # =========================================================
-# 4B. TAB 02: LUZ DEL PASILLO + JUEGO DE PERILLAS ALEATORIAS
+# 4B. TAB 02: CALIBRACIÓN DE PERILLAS (RECUPERA VIDEO ANTE LA NIÑA)
 # =========================================================
 func _build_light_and_knobs_tab() -> Control:
 	var wrapper = _create_doc_tab_wrapper()
@@ -1859,7 +2288,7 @@ func _build_light_and_knobs_tab() -> Control:
 	wrapper.add_child(vbox)
 
 	lbl_lure_title = Label.new()
-	lbl_lure_title.text = "🔦 LUZ DEL PASILLO & 🎛️ CALIBRACIÓN DE PERILLAS"
+	lbl_lure_title.text = "🎛️ CALIBRACIÓN DE VIDEO Y FLASH (ANTI-PHANTOM)"
 	lbl_lure_title.modulate = Color("#00f0ff")
 	lbl_lure_title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	vbox.add_child(lbl_lure_title)
@@ -1875,21 +2304,21 @@ func _build_light_and_knobs_tab() -> Control:
 	lbl_sys_audio_badge = _create_badge_label("🌀 VENTILACIÓN", Color("#05080d"), Color("#00ff9d"))
 	sys_hbox.add_child(lbl_sys_audio_badge)
 
-	lbl_sys_video_badge = _create_badge_label("🔦 LUZ: LISTA", Color("#05080d"), Color("#00ff9d"))
+	lbl_sys_video_badge = _create_badge_label("🎥 VIDEO: ONLINE", Color("#05080d"), Color("#00ff9d"))
 	sys_hbox.add_child(lbl_sys_video_badge)
 
-	lbl_sys_door_badge = _create_badge_label("💻 PC COMPAÑERA: OK", Color("#05080d"), Color("#00ff9d"))
+	lbl_sys_door_badge = _create_badge_label("💻 RADAR: OK", Color("#05080d"), Color("#00ff9d"))
 	sys_hbox.add_child(lbl_sys_door_badge)
 
 	lbl_lure_selected_cam = Label.new()
-	lbl_lure_selected_cam.text = "🎥 PASILLO SELECCIONADO: [ CAM C1 ] (Hacé clic en el mapa para cambiar de pasillo)"
+	lbl_lure_selected_cam.text = "🎥 PASILLO APUNTADO: [ CAM C1 ]"
 	lbl_lure_selected_cam.modulate = Color("#ffcc00")
 	lbl_lure_selected_cam.add_theme_font_size_override("font_size", 12)
 	lbl_lure_selected_cam.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	vbox.add_child(lbl_lure_selected_cam)
 
 	lbl_lure_hint = Label.new()
-	lbl_lure_hint.text = "• Al prender la LUZ DEL PASILLO donde está el monstruo, este DESAPARECE de las cámaras y tarda un tiempo IMPREDECIBLE en volver (-8% Energía).\n• Cuando el monstruo HACKEA LA LUZ, mantené click y girá las 4 PERILLAS hacia sus marcas verdes META."
+	lbl_lure_hint.text = "• Si te quedás mirando a la NIÑA FANTASMA en una cámara (>1.4s) o le tirás el Flash encima, ella INHABILITA TU PANTALLA DE CÁMARAS.\n• Girá las 4 PERILLAS a sus marcas verdes META para restaurar el video y el Flash de inmediato."
 	lbl_lure_hint.modulate = Color("#99badd")
 	lbl_lure_hint.add_theme_font_size_override("font_size", 11)
 	lbl_lure_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -1927,7 +2356,7 @@ func _build_light_and_knobs_tab() -> Control:
 		kv.add_child(k_title)
 
 		var k_canvas = Control.new()
-		k_canvas.custom_minimum_size = Vector2(68, 68)
+		k_canvas.custom_minimum_size = Vector2(84, 84)
 		k_canvas.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		k_canvas.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		var bound_idx = k_idx
@@ -1950,21 +2379,22 @@ func _build_light_and_knobs_tab() -> Control:
 
 		var b_left = Button.new()
 		b_left.text = "◀"
-		b_left.custom_minimum_size = Vector2(30, 26)
+		b_left.custom_minimum_size = Vector2(48, 42)
 		_apply_styled_button(b_left, Color("#00f0ff"), false)
 		b_left.pressed.connect(func(): _rotate_knob(bound_idx, -1))
 		k_btns.add_child(b_left)
 
 		var b_right = Button.new()
 		b_right.text = "▶"
-		b_right.custom_minimum_size = Vector2(30, 26)
+		b_right.custom_minimum_size = Vector2(48, 42)
 		_apply_styled_button(b_right, Color("#00f0ff"), false)
 		b_right.pressed.connect(func(): _rotate_knob(bound_idx, 1))
 		k_btns.add_child(b_right)
 
 	btn_hallway_light = Button.new()
-	btn_hallway_light.text = "🔦 PRENDER LUZ DEL PASILLO [CAM C1] (-8% ENERGÍA // HACE DESAPARECER AL MONSTRUO)"
-	btn_hallway_light.custom_minimum_size = Vector2(0, 46)
+	btn_hallway_light.text = "🔦 DISPARAR FLASH EN [CAM C1] (-6% ENERGÍA // AHUYENTA A SUBJECT-ZERO)"
+	btn_hallway_light.custom_minimum_size = Vector2(0, 66)
+	btn_hallway_light.add_theme_font_size_override("font_size", 16)
 	btn_hallway_light.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	btn_hallway_light.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	_apply_styled_button(btn_hallway_light, Color("#00ff9d"), true)
@@ -1972,8 +2402,8 @@ func _build_light_and_knobs_tab() -> Control:
 	vbox.add_child(btn_hallway_light)
 
 	btn_goto_reboot = Button.new()
-	btn_goto_reboot.text = "💻 ¡PC DE COMPAÑERA BLOQUEADA! IR A TAB 03 PARA DESBLOQUEAR >>"
-	btn_goto_reboot.custom_minimum_size = Vector2(0, 38)
+	btn_goto_reboot.text = "💻 ¡RADAR DE COMPAÑERA BLOQUEADO! IR A TAB 03 >>"
+	btn_goto_reboot.custom_minimum_size = Vector2(0, 54)
 	btn_goto_reboot.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	btn_goto_reboot.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	_apply_styled_button(btn_goto_reboot, Color("#f600ff"), true)
@@ -2021,6 +2451,7 @@ func _sync_knobs_aligned() -> void:
 		knob_Target_values[i] = v
 		knob_Current_values[i] = v
 	light_hacked_by_monster = false
+	camera_disabled_timer = 0.0
 	_refresh_knobs_ui()
 	_refresh_lure_tab_ui()
 
@@ -2048,9 +2479,10 @@ func _check_if_all_knobs_aligned() -> void:
 			all_aligned = false
 			break
 
-	if all_aligned and light_hacked_by_monster:
+	if all_aligned and (light_hacked_by_monster or camera_disabled_timer > 0.0):
 		light_hacked_by_monster = false
-		_log_chat("SISTEMA", "🎛️ ¡Perillas alineadas! Circuito de Luz del Pasillo restaurado y listo para usar.", "#00ff9d")
+		camera_disabled_timer = 0.0
+		ghost_jumpscare_flash = 0.0
 		_refresh_lure_tab_ui()
 		_update_3d_previz(0.0)
 
@@ -2095,54 +2527,81 @@ func _draw_single_knob(knob_idx: int) -> void:
 	c.draw_circle(needle_end, 3.2, base_col)
 	c.draw_circle(center, 4.5, base_col)
 
+# --- JUMPSCARE DE LA NIÑA FANTASMA Y BLOQUEO DE PANTALLA ---
+func _trigger_ghost_girl_jumpscare(_reason: String) -> void:
+	ghost_active_cam = ""
+	ghost_stare_timer = 0.0
+	ghost_encounters_count = 0
+	ghost_forced_attack_timer = 0.0
+	camera_disabled_timer = 9.0
+	ghost_jumpscare_flash = 1.0
+	_trigger_monster_light_knob_hack()
+
+	# Penalización de pánico y turbina
+	music_box_charge = max(0.0, music_box_charge - 20.0)
+	mia_bpm = min(198, mia_bpm + 35)
+	bpm = min(max_bpm, bpm + 20)
+	mia_damage_flash = 0.85
+
+	_reset_ghost_video()
+
+	_update_mia_vitals_ui()
+	_update_turbine_ui()
+	_refresh_lure_tab_ui()
+	_update_3d_previz(0.0)
+
 func _on_hallway_light_pressed() -> void:
-	if not game_active:
+	if not game_active or flash_cooldown > 0.0 or ghost_jumpscare_playing:
 		return
-	if light_hacked_by_monster:
-		_log_chat("SISTEMA", "⚠️ ¡El monstruo hackeó la Luz del Pasillo! Mantené click y girá las 4 perillas de arriba hacia sus marcas verdes META.", "#ff1744")
+	if light_hacked_by_monster or camera_disabled_timer > 0.0:
+		if is_instance_valid(tab_container):
+			tab_container.current_tab = 1
 		return
-	if power_energy < 8.0:
-		_log_chat("SISTEMA", "⚠️ ¡Energía insuficiente (<8%) para encender los reflectores del pasillo!", "#ff1744")
+	if not companion_pc_unlocked:
+		if is_instance_valid(tab_container):
+			tab_container.current_tab = 2
 		return
+
+	# ¡TRAMPA!: Si disparás el Flash en la cámara donde está la Niña Fantasma, te ataca instantáneamente
+	if ghost_active_cam != "" and selected_cam_id == ghost_active_cam:
+		_begin_ghost_jumpscare("¡Le disparaste el Flash a la Niña Fantasma en [C%s]!" % selected_cam_id, true)
+		return
+
+	power_energy = max(0.0, power_energy - 6.0)
+	flash_stun_grace = 1.15
+	flash_cooldown = 0.8
+
+	if is_instance_valid(light_audio_player) and light_audio_player.stream != null:
+		light_audio_player.pitch_scale = randf_range(0.85, 1.05)
+		light_audio_player.volume_db = -2.0
+		light_audio_player.play()
+
 	if not monster_attack_active:
-		_log_chat("SISTEMA", "🔦 Encendiste la luz en [CAM C%s], pero el monstruo está oculto y todavía no reapareció." % selected_cam_id, "#88ccee")
+		_update_energy_and_temp_hud()
+		_refresh_lure_tab_ui()
+		_update_3d_previz(0.0)
 		return
 
-	power_energy = max(0.0, power_energy - 8.0)
 	var actual_node = _get_monster_node_id()
-
 	if selected_cam_id == actual_node:
-		flash_stun_grace = 1.2
+		monster_spotted_on_cam = true
 		monster_last_node_id = actual_node
 
-		var stage_branches = _branches_for_level(monster_security_level)
-		var move_desc = ""
-		if monster_security_level > 1 and (randf() < 0.60 or stage_branches.size() <= 1):
-			monster_security_level -= 1
-			monster_branch = _random_branch_for_level(monster_security_level)
-			move_desc = "retrocedió un nivel hacia las sombras"
-		elif stage_branches.size() > 1:
-			var alt_branches: Array[String] = []
-			for b in stage_branches:
-				if b != monster_branch:
-					alt_branches.append(b)
-			if not alt_branches.is_empty():
-				monster_branch = alt_branches[randi() % alt_branches.size()]
-			move_desc = "huyó hacia un pasillo lateral"
+		# En la puerta final C4, el Flash solo lo frena un poco (obligándote a usar la Puerta Blindada)
+		if monster_security_level >= TOTAL_SECURITY_LEVELS:
+			monster_hack_progress = max(0.0, monster_hack_progress - 22.0)
 		else:
-			move_desc = "se desvaneció en la oscuridad del pasillo"
-
-		monster_attack_active = false
-		monster_is_moving = false
-		monster_spotted_on_cam = false
-		monster_hack_progress = 0.0
-		door_hold_timer = 0.0
-		door_hold_target_time = -1.0
-		monster_cooldown_timer = randf_range(4.0, 16.5)
-
-		_log_chat("LUZ_PASILLO", "🔦 ¡IMPACTO LUMÍNICO EN [C%s]! Subject-Zero %s, DESAPARECIÓ de las cámaras y tardará un tiempo impredecible en volver a aparecer!" % [actual_node, move_desc], "#00ff9d")
-	else:
-		_log_chat("LUZ_PASILLO", "⚠️ Encendiste la luz en [CAM C%s] (-8%% Energía), pero el monstruo no estaba en ese pasillo." % selected_cam_id, "#ffaa00")
+			# En los pasillos 1, 2 y 3 el Flash lo encandila y lo obliga a retroceder/ocultarse
+			if monster_security_level > 1 and randf() < 0.65:
+				monster_security_level -= 1
+				monster_branch = _random_branch_for_level(monster_security_level)
+			monster_attack_active = false
+			monster_is_moving = false
+			monster_spotted_on_cam = false
+			monster_hack_progress = 0.0
+			door_hold_timer = 0.0
+			door_hold_target_time = -1.0
+			monster_cooldown_timer = randf_range(4.0, 11.0)
 
 	_update_energy_and_temp_hud()
 	_refresh_lure_tab_ui()
@@ -2152,7 +2611,7 @@ func _on_hallway_light_pressed() -> void:
 
 func _count_active_errors() -> int:
 	var c: int = 0
-	if light_hacked_by_monster:
+	if light_hacked_by_monster or camera_disabled_timer > 0.0:
 		c += 1
 	if not companion_pc_unlocked:
 		c += 1
@@ -2161,7 +2620,7 @@ func _count_active_errors() -> int:
 func _on_hack_alert_goto_pressed() -> void:
 	if not is_instance_valid(tab_container):
 		return
-	if light_hacked_by_monster:
+	if light_hacked_by_monster or camera_disabled_timer > 0.0:
 		tab_container.current_tab = 1
 	elif not companion_pc_unlocked:
 		tab_container.current_tab = 2
@@ -2174,58 +2633,66 @@ func _update_hack_alert_visual_pulse() -> void:
 	hack_alert_style.bg_color = Color(0.22 + 0.14 * blink, 0.02, 0.06, 0.95)
 
 func _refresh_lure_tab_ui() -> void:
+	var video_down: bool = (light_hacked_by_monster or camera_disabled_timer > 0.0)
+
 	if is_instance_valid(lbl_sys_audio_badge):
 		_update_badge_style(lbl_sys_audio_badge, "🌀 VENTILACIÓN", Color("#05080d"), Color("#00ff9d"))
 	if is_instance_valid(lbl_sys_video_badge):
-		_update_badge_style(lbl_sys_video_badge, "🎛️ LUZ: ¡HACKEADA!" if light_hacked_by_monster else "🔦 LUZ: LISTA", Color("#05080d"), Color("#ff1744") if light_hacked_by_monster else Color("#00ff9d"))
+		_update_badge_style(lbl_sys_video_badge, "👻 VIDEO: ¡CAÍDO!" if video_down else "🎥 VIDEO: ONLINE", Color("#05080d"), Color("#ff1744") if video_down else Color("#00ff9d"))
 	if is_instance_valid(lbl_sys_door_badge):
-		_update_badge_style(lbl_sys_door_badge, "💻 PC COMPAÑERA: ACTIVA" if companion_pc_unlocked else "🔒 PC COMPAÑERA: ¡HACKEADA!", Color("#05080d"), Color("#00ff9d") if companion_pc_unlocked else Color("#ff1744"))
+		_update_badge_style(lbl_sys_door_badge, "💻 RADAR: ACTIVO" if companion_pc_unlocked else "🔒 RADAR: ¡HACKEADO!", Color("#05080d"), Color("#00ff9d") if companion_pc_unlocked else Color("#ff1744"))
 
 	if is_instance_valid(tab_container) and tab_container.get_tab_count() >= 3:
 		tab_container.set_tab_title(0, "🌀 01_TURBINA")
-		tab_container.set_tab_title(1, "🚨 02_LUZ Y PERILLAS (!)" if light_hacked_by_monster else "🎛️ 02_LUZ Y PERILLAS")
-		tab_container.set_tab_title(2, "🚨 03_PC COMPAÑERA (!)" if not companion_pc_unlocked else "💻 03_PC COMPAÑERA")
+		tab_container.set_tab_title(1, "🚨 02_ÓPTICA CAÍDA (!)" if video_down else "🎛️ 02_ÓPTICA / PERILLAS")
+		tab_container.set_tab_title(2, "🚨 03_RADAR CAÍDO (!)" if not companion_pc_unlocked else "💻 03_RADAR COMPAÑERA")
 
 	if is_instance_valid(hack_alert_banner):
 		var hacked_parts: Array[String] = []
-		if light_hacked_by_monster:
-			hacked_parts.append("🎛️ LUZ/PERILLAS [TAB 02]")
+		if video_down:
+			hacked_parts.append("👻 CÁMARAS INHABILITADAS POR PHANTOM [TAB 02]")
 		if not companion_pc_unlocked:
-			hacked_parts.append("💻 PC COMPAÑERA [TAB 03]")
+			hacked_parts.append("💻 RADAR COMPAÑERA [TAB 03]")
 
 		if hacked_parts.is_empty():
 			hack_alert_banner.visible = false
 		else:
 			hack_alert_banner.visible = true
-			lbl_hack_alert_banner.text = "🚨 ¡SISTEMA HACKEADO!: " + "  +  ".join(hacked_parts)
-			if light_hacked_by_monster:
-				btn_hack_alert_goto.text = "🎛️ ACOMODAR PERILLAS [TAB 02] >>"
+			lbl_hack_alert_banner.text = "🚨 ¡ALERTA!: " + "  +  ".join(hacked_parts)
+			if video_down:
+				btn_hack_alert_goto.text = "🎛️ CALIBRAR PERILLAS [TAB 02] >>"
 			else:
-				btn_hack_alert_goto.text = "💻 DESBLOQUEAR PC [TAB 03] >>"
+				btn_hack_alert_goto.text = "💻 DESBLOQUEAR RADAR [TAB 03] >>"
 
 	if is_instance_valid(lbl_lure_selected_cam):
 		lbl_lure_selected_cam.text = "🎥 PASILLO APUNTADO: [ CAM C%s ]  |  ENERGÍA: %d%%" % [selected_cam_id, int(power_energy)]
-		lbl_lure_selected_cam.modulate = Color("#ffcc00")
 
 	if is_instance_valid(btn_hallway_light):
-		if light_hacked_by_monster:
-			btn_hallway_light.text = "🔒 LUZ HACKEADA — MANTENÉ CLICK Y GIRÁ LAS 4 PERILLAS ARRIBA"
+		if video_down:
+			btn_hallway_light.text = "🔒 ÓPTICA Y FLASH CAÍDOS — ALINEÁ LAS 4 PERILLAS ARRIBA"
 			_apply_styled_button(btn_hallway_light, Color("#ff1744"), true)
 		else:
-			btn_hallway_light.text = "🔦 PRENDER LUZ DEL PASILLO EN CAM C%s (-8%% ENERGÍA // EL MONSTRUO DESAPARECE)" % selected_cam_id
-			_apply_styled_button(btn_hallway_light, Color("#00ff9d"), monster_attack_active)
+			btn_hallway_light.text = "🔦 DISPARAR FLASH EN CAM C%s (-6%% ENERGÍA // ¡NO USAR EN LA NIÑA!)" % selected_cam_id
+			_apply_styled_button(btn_hallway_light, Color("#00ff9d"), true)
+
+	if is_instance_valid(btn_quick_flash):
+		if video_down:
+			btn_quick_flash.text = "🚨 VIDEO ERROR"
+			_apply_styled_button(btn_quick_flash, Color("#ff1744"), true)
+		else:
+			btn_quick_flash.text = "🔦 FLASH C%s (-6%%)" % selected_cam_id
+			_apply_styled_button(btn_quick_flash, Color("#00ff9d"), true)
 
 	if is_instance_valid(btn_goto_reboot):
 		btn_goto_reboot.visible = not companion_pc_unlocked
-		btn_goto_reboot.text = "💻 ¡PC DE %s BLOQUEADA! CLIC PARA DESBLOQUEAR EN TAB 03 >>" % (current_mission.agent_name.to_upper() if is_instance_valid(current_mission) else "COMPAÑERA")
 
 	if is_instance_valid(lbl_code_progress_status):
 		var locked_cnt = _count_locked_doors()
-		lbl_code_progress_status.text = "PUERTAS CERRADAS: %d (-%0.1f%%⚡/s)" % [locked_cnt, float(locked_cnt) * 1.45]
+		lbl_code_progress_status.text = "PUERTA ACTIVA: %d (-%0.1f%%⚡/s)" % [locked_cnt, float(locked_cnt) * 2.4]
 		lbl_code_progress_status.modulate = Color("#ffaa00") if locked_cnt > 0 else Color("#00ff9d")
 
 # =========================================================
-# 4C. TAB 03: DESBLOQUEAR PC DE TU COMPAÑERA (MATRIZ HEX)
+# 4C. TAB 03: DESBLOQUEAR RADAR DE TU COMPAÑERA (MATRIZ HEX)
 # =========================================================
 func _build_hacking_minigame_tab() -> Control:
 	var wrapper = _create_doc_tab_wrapper()
@@ -2239,7 +2706,7 @@ func _build_hacking_minigame_tab() -> Control:
 	vbox.add_child(top_bar)
 
 	lbl_breach_status = Label.new()
-	lbl_breach_status.text = "💻 DESBLOQUEAR COMPUTADORA DE TU COMPAÑERA"
+	lbl_breach_status.text = "💻 TERMINAL DE RADAR DE TU COMPAÑERA"
 	lbl_breach_status.modulate = Color("#00f0ff")
 	lbl_breach_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	lbl_breach_status.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
@@ -2247,14 +2714,15 @@ func _build_hacking_minigame_tab() -> Control:
 
 	btn_reset_matrix = Button.new()
 	btn_reset_matrix.text = "↻ NUEVA CLAVE"
+	btn_reset_matrix.custom_minimum_size = Vector2(0, 44)
 	_apply_styled_button(btn_reset_matrix, Color("#00f0ff"), false)
 	btn_reset_matrix.pressed.connect(_on_manual_reset_matrix)
 	top_bar.add_child(btn_reset_matrix)
 
 	lbl_breach_hint = Label.new()
-	lbl_breach_hint.text = "Completá la secuencia Hex (FILA → COLUMNA) para DESBLOQUEAR LA COMPUTADORA de tu compañera: una vez desbloqueada, ella reducirá automáticamente el hackeo del monstruo y limpiará el sabotaje térmico!"
+	lbl_breach_hint.text = "Cuando el radar de tu compañera está activo, ella marca en el mapa en qué NIVEL (1..4) se mueve Subject-Zero y desacelera su avance. ¡Si el monstruo lo bloquea, completá la secuencia Hex!"
 	lbl_breach_hint.modulate = Color("#88aacc")
-	lbl_breach_hint.add_theme_font_size_override("font_size", 12)
+	lbl_breach_hint.add_theme_font_size_override("font_size", 11)
 	lbl_breach_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(lbl_breach_hint)
 
@@ -2293,7 +2761,7 @@ func _build_hacking_minigame_tab() -> Control:
 		var row_btns: Array = []
 		for c in range(5):
 			var btn = Button.new()
-			btn.custom_minimum_size = Vector2(68, 44)
+			btn.custom_minimum_size = Vector2(72, 54)
 			btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 			btn.pressed.connect(_on_matrix_cell_pressed.bind(r, c))
 			grid_matrix.add_child(btn)
@@ -2370,10 +2838,8 @@ func _on_matrix_cell_pressed(r: int, c: int) -> void:
 		if entered_sequence.size() >= target_sequence.size():
 			companion_pc_unlocked = true
 			temp_hacked_by_monster = false
-			monster_hack_progress = max(0.0, monster_hack_progress - 28.0)
+			monster_hack_progress = max(0.0, monster_hack_progress - 25.0)
 			bpm = max(70, bpm - 12)
-			var comp_name = current_mission.agent_name if is_instance_valid(current_mission) else "Compañera"
-			_log_chat(comp_name.to_upper(), "💻 «¡Gracias por desbloquear mi computadora! Estoy reduciendo el hackeo del monstruo (-28%% inmediato + reducción continua) y purgué el sabotaje térmico!»", "#00ff9d")
 			_update_turbine_ui()
 			_refresh_lure_tab_ui()
 			_update_terminal_lock_state()
@@ -2382,7 +2848,6 @@ func _on_matrix_cell_pressed(r: int, c: int) -> void:
 		_refresh_matrix_ui()
 		_update_companion_perk_ui()
 	else:
-		_log_chat("SISTEMA", "⚠️ Celda incorrecta! Secuencia de desbloqueo reiniciada.", "#ffcc00")
 		_generate_breach_matrix()
 
 func _on_manual_reset_matrix() -> void:
@@ -2397,10 +2862,10 @@ func _refresh_matrix_ui() -> void:
 		btn_reset_matrix.disabled = not can_interact
 
 	var comp_name = current_mission.agent_name.to_upper() if is_instance_valid(current_mission) else "COMPAÑERA"
-	var header_label = "CÓDIGO DE DESBLOQUEO PC (%s):" % comp_name
+	var header_label = "CÓDIGO DE DESBLOQUEO (%s):" % comp_name
 	var target_str = "[b][color=#88aacc]%s[/color][/b]\n" % header_label
 	if companion_pc_unlocked and not temp_hacked_by_monster and entered_sequence.size() >= target_sequence.size():
-		target_str += "[color=#00ff9d][ PC DESBLOQUEADA — REDUCIENDO HACKEO ][/color]"
+		target_str += "[color=#00ff9d][ RADAR ACTIVO — ESCANEANDO NIVEL ][/color]"
 	else:
 		for i in range(target_sequence.size()):
 			if i < entered_sequence.size():
@@ -2411,10 +2876,10 @@ func _refresh_matrix_ui() -> void:
 				target_str += "[color=#667788][ %s ][/color] " % target_sequence[i]
 	lbl_target_seq.text = target_str
 
-	var buf_str = "[b][color=#88aacc]ESTADO TERMINAL COMPAÑERA:[/color][/b]\n"
+	var buf_str = "[b][color=#88aacc]ESTADO TERMINAL:[/color][/b]\n"
 	if companion_pc_unlocked and not temp_hacked_by_monster and entered_sequence.size() >= target_sequence.size():
-		buf_str += "[b][color=#00ff9d]✓ %s ESTÁ TRABAJANDO EN ELLO (REDUCIENDO HACKEO)[/color][/b]" % comp_name
-		lbl_breach_status.text = "✓ PC DE %s ACTIVA // REDUCIENDO HACKEO" % comp_name
+		buf_str += "[b][color=#00ff9d]✓ %s RASTREANDO EN EL MAPA[/color][/b]" % comp_name
+		lbl_breach_status.text = "✓ RADAR DE %s ACTIVO" % comp_name
 		lbl_breach_status.modulate = Color("#00ff9d")
 	else:
 		for t in entered_sequence:
@@ -2422,7 +2887,7 @@ func _refresh_matrix_ui() -> void:
 		for _i in range(target_sequence.size() - entered_sequence.size()):
 			buf_str += "[color=#445566]__[/color]  "
 		var mode_txt = ("FILA %d" % (active_index + 1)) if selecting_row else ("COLUMNA %d" % (active_index + 1))
-		lbl_breach_status.text = "🔒 PC BLOQUEADA — ELEGÍ EN %s // PASO %d/%d" % [
+		lbl_breach_status.text = "🔒 RADAR CAÍDO — ELEGÍ EN %s // PASO %d/%d" % [
 			mode_txt,
 			entered_sequence.size() + 1,
 			target_sequence.size()
@@ -2468,11 +2933,11 @@ func _get_monster_node_id() -> String:
 func _node_id_for(level: int, branch: String) -> String:
 	if level <= 1:
 		if branch == "A":
-			return "1A" # Arriba
+			return "1A"
 		elif branch == "B":
-			return "1"  # Medio
+			return "1"
 		else:
-			return "1B" # Abajo
+			return "1B"
 	elif level == 2 or level == 3:
 		return str(level) + ("B" if branch == "B" else "A")
 	return "4"
@@ -2498,11 +2963,51 @@ func _stage_doors_text(level: int) -> String:
 	return " / ".join(parts)
 
 func _select_camera(cam_id: String) -> void:
+	# Si ya está en la animación del 3er encuentro inevitable, no te deja cambiar de cámara
+	if ghost_forced_attack_timer > 0.0 or ghost_jumpscare_playing:
+		return
+
 	if not CAM_NODE_IDS.has(cam_id):
 		cam_id = "1"
+	var previous_cam: String = selected_cam_id
 	selected_cam_id = cam_id
 
-	if monster_attack_active and selected_cam_id == _get_monster_node_id():
+	var video_ok: bool = (camera_disabled_timer <= 0.0 and not light_hacked_by_monster)
+
+	# Si estabas viendo a la Niña Fantasma (1er o 2do cruce) y cambiaste a tiempo, desaparece
+	if ghost_active_cam != "" and previous_cam == ghost_active_cam and selected_cam_id != ghost_active_cam:
+		ghost_active_cam = ""
+		ghost_stare_timer = 0.0
+
+	# Probabilidad de que la Niña Fantasma aparezca en una cámara vacía al cambiar de canal
+	var monster_node = _get_monster_node_id() if monster_attack_active else ""
+	if game_active and video_ok and previous_cam != selected_cam_id:
+		if selected_cam_id != monster_node and ghost_active_cam == "":
+			var ghost_chance: float = 0.22
+			if bunker_temperature >= 45.0:
+				ghost_chance += 0.20
+			if mia_bpm >= 135:
+				ghost_chance += 0.12
+			if randf() < ghost_chance:
+				ghost_encounters_count += 1
+				ghost_active_cam = selected_cam_id
+				ghost_stare_timer = 0.0
+
+				if is_instance_valid(ghost_laugh_player) and ghost_laugh_player.stream != null:
+					ghost_laugh_player.pitch_scale = randf_range(0.92, 1.08)
+					ghost_laugh_player.play()
+
+				if ghost_encounters_count >= GHOST_MAX_ENCOUNTERS:
+					if _ghost_video_available():
+						# 3er encuentro: salta el clip idle y arranca directo en el jumpscare (1:00-2:00)
+						_begin_ghost_jumpscare("¡3er encuentro con la Anomalía Fantasma en [C%s]!" % selected_cam_id, true)
+					else:
+						ghost_forced_attack_timer = 0.65
+						if is_instance_valid(sfx_scare_player):
+							sfx_scare_player.pitch_scale = 1.12
+							sfx_scare_player.play()
+
+	if monster_attack_active and selected_cam_id == monster_node and video_ok:
 		monster_spotted_on_cam = true
 
 	for id_key in cam_select_buttons.keys():
@@ -2530,11 +3035,42 @@ func _on_tactical_map_gui_input(event: InputEvent) -> void:
 		var click_pos: Vector2 = event.position
 		for cam_id in map_node_positions.keys():
 			var node_pos: Vector2 = map_node_positions[cam_id]
-			if click_pos.distance_to(node_pos) <= 28.0:
+			if click_pos.distance_to(node_pos) <= 32.0:
 				_select_camera(cam_id)
 				break
 
+# =========================================================
+# VISOR 3D DE CÁMARA + MODELO 3D DE LA NIÑA FANTASMA
+# =========================================================
+func _auto_load_fnaf_hall_textures() -> void:
+	var search_dirs: Array[String] = [
+		"res://assets/cameras/",
+		"res://assets/sprites/",
+		"res://assets/backgrounds/",
+		"res://assets/",
+		"res://"
+	]
+	if not is_instance_valid(tex_cam_empty):
+		tex_cam_empty = _find_hall_tex("hall1", search_dirs)
+	if not is_instance_valid(tex_monster_stage_1):
+		tex_monster_stage_1 = _find_hall_tex("hall1_m1", search_dirs)
+	if not is_instance_valid(tex_monster_stage_2):
+		tex_monster_stage_2 = _find_hall_tex("hall1_m2", search_dirs)
+	if not is_instance_valid(tex_monster_stage_3):
+		tex_monster_stage_3 = _find_hall_tex("hall1_m3", search_dirs)
+
+func _find_hall_tex(base_name: String, dirs: Array[String]) -> Texture2D:
+	for d in dirs:
+		for ext in ["jpg", "png", "jpeg", "webp"]:
+			var path: String = d + base_name + "." + ext
+			var tex: Texture2D = _load_board_texture(path)
+			if is_instance_valid(tex):
+				return tex
+	return null
+
 func _build_3d_camera_previz() -> Control:
+	_auto_load_fnaf_hall_textures()
+
 	var frame = _create_cyber_panel(Color("#040810"), Color("#00f0ff"), 2, 3)
 	frame.custom_minimum_size = Vector2(215, 0)
 	frame.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2547,272 +3083,87 @@ func _build_3d_camera_previz() -> Control:
 	layer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	frame.add_child(layer)
 
-	var svc = SubViewportContainer.new()
-	svc.stretch = true
-	svc.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	layer.add_child(svc)
+	# Contenedor que hace el paneo horizontal de FNAF (aprovechando el formato widescreen de hall1.jpg)
+	cam_pan_root = Control.new()
+	cam_pan_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	cam_pan_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(cam_pan_root)
 
-	previz_viewport = SubViewport.new()
-	previz_viewport.own_world_3d = true
-	previz_viewport.size = Vector2i(320, 220)
-	previz_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	svc.add_child(previz_viewport)
+	# 1. Imagen principal del pasillo por estados (hall1, hall1_m1, hall1_m2, hall1_m3)
+	cam_state_tex_rect = TextureRect.new()
+	cam_state_tex_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	cam_state_tex_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	cam_state_tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	cam_state_tex_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cam_state_tex_rect.texture = tex_cam_empty
+	cam_pan_root.add_child(cam_state_tex_rect)
 
-	var root_3d = Node3D.new()
-	previz_viewport.add_child(root_3d)
+	# 1b. Video de la Niña Fantasma (1824x768). Va debajo del shader de lente, así hereda el paneo y la distorsión.
+	_load_ghost_videos()
+	ghost_video_container = AspectRatioContainer.new()
+	ghost_video_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	ghost_video_container.ratio = 1824.0 / 768.0
+	ghost_video_container.stretch_mode = AspectRatioContainer.STRETCH_COVER
+	ghost_video_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ghost_video_container.visible = false
+	cam_pan_root.add_child(ghost_video_container)
 
-	var env_node = WorldEnvironment.new()
-	var env = Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color("#010408")
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color("#08121a")
-	env.ambient_light_energy = 0.55
-	env_node.environment = env
-	root_3d.add_child(env_node)
+	ghost_video_player = VideoStreamPlayer.new()
+	ghost_video_player.expand = true
+	ghost_video_player.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ghost_video_player.finished.connect(_on_ghost_video_finished)
+	ghost_video_container.add_child(ghost_video_player)
 
-	previz_cam_3d = Camera3D.new()
-	previz_cam_3d.position = Vector3(0.0, 1.4, 3.2)
-	previz_cam_3d.rotation_degrees = Vector3(-9.0, 0.0, 0.0)
-	previz_cam_3d.fov = 74.0
-	root_3d.add_child(previz_cam_3d)
+	# 2. Overlay de la Niña Fantasma sobre el pasillo (si aparece en la cámara)
+	cam_ghost_overlay = Control.new()
+	cam_ghost_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	cam_ghost_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cam_ghost_overlay.visible = false
+	cam_ghost_overlay.draw.connect(_draw_ghost_over_hallway)
+	cam_pan_root.add_child(cam_ghost_overlay)
 
-	previz_room_light = OmniLight3D.new()
-	previz_room_light.position = Vector3(0.0, 2.4, -0.8)
-	previz_room_light.light_color = Color("#3cd070")
-	previz_room_light.light_energy = 1.1
-	previz_room_light.omni_range = 10.0
-	root_3d.add_child(previz_room_light)
+	# 3. Overlay de Compuerta Magnética Cerrada (baja sobre hall1.jpg cuando bloqueás la cámara)
+	cam_door_bars_overlay = Control.new()
+	cam_door_bars_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	cam_door_bars_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cam_door_bars_overlay.visible = false
+	cam_door_bars_overlay.draw.connect(_draw_locked_door_over_hallway)
+	layer.add_child(cam_door_bars_overlay)
 
-	var corridor = Node3D.new()
-	root_3d.add_child(corridor)
+	# 4. Shader FNAF: Estira los bordes laterales de la imagen y aplica el destello del Flash
+	var lens_warp_overlay = ColorRect.new()
+	lens_warp_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	lens_warp_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cam_lens_mat = _create_fnaf_lens_warp_material()
+	lens_warp_overlay.material = cam_lens_mat
+	layer.add_child(lens_warp_overlay)
 
-	var wall_mat = StandardMaterial3D.new()
-	wall_mat.albedo_color = Color("#0a1118")
-	wall_mat.roughness = 0.95
-
-	var floor_mat = StandardMaterial3D.new()
-	floor_mat.albedo_color = Color("#05080c")
-	floor_mat.roughness = 0.35
-	floor_mat.metallic = 0.1
-
-	var door_edge_mat = StandardMaterial3D.new()
-	door_edge_mat.albedo_color = Color("#111a24")
-	door_edge_mat.roughness = 0.8
-
-	var pipe_mat = StandardMaterial3D.new()
-	pipe_mat.albedo_color = Color("#0c1218")
-	pipe_mat.roughness = 0.4
-	pipe_mat.metallic = 0.6
-
-	var floor_mi = MeshInstance3D.new()
-	var floor_box = BoxMesh.new()
-	floor_box.size = Vector3(2.8, 0.1, 13.0)
-	floor_mi.mesh = floor_box
-	floor_mi.material_override = floor_mat
-	floor_mi.position = Vector3(0.0, 0.0, -3.0)
-	corridor.add_child(floor_mi)
-
-	var ceil_mi = MeshInstance3D.new()
-	var ceil_box = BoxMesh.new()
-	ceil_box.size = Vector3(2.8, 0.1, 13.0)
-	ceil_mi.mesh = ceil_box
-	ceil_mi.material_override = wall_mat
-	ceil_mi.position = Vector3(0.0, 2.6, -3.0)
-	corridor.add_child(ceil_mi)
-
-	var side_box = BoxMesh.new()
-	side_box.size = Vector3(0.1, 2.6, 13.0)
-	for side_x in [-1.4, 1.4]:
-		var w_mi = MeshInstance3D.new()
-		w_mi.mesh = side_box
-		w_mi.material_override = wall_mat
-		w_mi.position = Vector3(side_x, 1.3, -3.0)
-		corridor.add_child(w_mi)
-
-	var pipe_box = CylinderMesh.new()
-	pipe_box.top_radius = 0.06
-	pipe_box.bottom_radius = 0.06
-	pipe_box.height = 13.0
-	for px in [-0.8, -0.7, 0.7]:
-		var p_mi = MeshInstance3D.new()
-		p_mi.mesh = pipe_box
-		p_mi.material_override = pipe_mat
-		p_mi.rotation_degrees = Vector3(90.0, 0.0, 0.0)
-		p_mi.position = Vector3(px, 2.45, -3.0)
-		corridor.add_child(p_mi)
-
-	var door_panel_box = BoxMesh.new()
-	door_panel_box.size = Vector3(0.12, 1.9, 1.1)
-	for z_pos in [-1.5, -4.5]:
-		for px in [-1.34, 1.34]:
-			var d_edge = MeshInstance3D.new()
-			d_edge.mesh = door_panel_box
-			d_edge.material_override = door_edge_mat
-			d_edge.position = Vector3(px, 0.95, z_pos)
-			corridor.add_child(d_edge)
-
-	var back_mi = MeshInstance3D.new()
-	var back_box = BoxMesh.new()
-	back_box.size = Vector3(2.8, 2.6, 0.1)
-	back_mi.mesh = back_box
-	back_mi.material_override = wall_mat
-	back_mi.position = Vector3(0.0, 1.3, -9.5)
-	corridor.add_child(back_mi)
-
-	previz_door_mesh = MeshInstance3D.new()
-	var door_box = BoxMesh.new()
-	door_box.size = Vector3(2.6, 2.5, 0.15)
-	previz_door_mesh.mesh = door_box
-	var door_mat = StandardMaterial3D.new()
-	door_mat.albedo_color = Color("#0b221a")
-	door_mat.roughness = 0.8
-	previz_door_mesh.material_override = door_mat
-	previz_door_mesh.position = Vector3(0.0, 3.85, 0.5)
-	corridor.add_child(previz_door_mesh)
-
-	# --- EL MONSTRUO LIMINAL ---
-	previz_monster_root = Node3D.new()
-	previz_monster_root.position = Vector3(0.0, 0.0, -4.5)
-	root_3d.add_child(previz_monster_root)
-
-	var body_mat = StandardMaterial3D.new()
-	body_mat.albedo_color = Color("#020202")
-	body_mat.roughness = 1.0
-
-	var face_mat = StandardMaterial3D.new()
-	face_mat.albedo_color = Color("#2a2b2f")
-	face_mat.roughness = 0.9
-
-	var eye_mat = StandardMaterial3D.new()
-	eye_mat.albedo_color = Color("#ffffff")
-	eye_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-
-	var pupil_mat = StandardMaterial3D.new()
-	pupil_mat.albedo_color = Color("#000000")
-
-	var mouth_mat = StandardMaterial3D.new()
-	mouth_mat.albedo_color = Color("#111111")
-	mouth_mat.roughness = 0.9
-
-	var torso_mi = MeshInstance3D.new()
-	var torso_mesh = CapsuleMesh.new()
-	torso_mesh.radius = 0.28
-	torso_mesh.height = 1.4
-	torso_mi.mesh = torso_mesh
-	torso_mi.material_override = body_mat
-	torso_mi.position = Vector3(0.0, 1.15, 0.0)
-	previz_monster_root.add_child(torso_mi)
-
-	previz_monster_head = Node3D.new()
-	previz_monster_head.position = Vector3(0.0, 1.85, 0.08)
-	previz_monster_root.add_child(previz_monster_head)
-
-	var head_mi = MeshInstance3D.new()
-	var head_sphere = SphereMesh.new()
-	head_sphere.radius = 0.24
-	head_sphere.height = 0.54
-	head_mi.mesh = head_sphere
-	head_mi.material_override = face_mat
-	previz_monster_head.add_child(head_mi)
-
-	var eye_mesh = SphereMesh.new()
-	eye_mesh.radius = 0.065
-	eye_mesh.height = 0.08
-	var pupil_mesh = SphereMesh.new()
-	pupil_mesh.radius = 0.02
-	pupil_mesh.height = 0.02
-	for ex in [-0.08, 0.08]:
-		var eye_mi = MeshInstance3D.new()
-		eye_mi.mesh = eye_mesh
-		eye_mi.material_override = eye_mat
-		eye_mi.position = Vector3(ex, 0.08, 0.17)
-		previz_monster_head.add_child(eye_mi)
-
-		var pupil_mi = MeshInstance3D.new()
-		pupil_mi.mesh = pupil_mesh
-		pupil_mi.material_override = pupil_mat
-		pupil_mi.position = Vector3(ex, 0.08, 0.21)
-		previz_monster_head.add_child(pupil_mi)
-
-	var mouth_mi = MeshInstance3D.new()
-	var mouth_mesh = SphereMesh.new()
-	mouth_mesh.radius = 0.09
-	mouth_mesh.height = 0.12
-	mouth_mi.mesh = mouth_mesh
-	mouth_mi.material_override = mouth_mat
-	mouth_mi.position = Vector3(0.0, -0.09, 0.15)
-	previz_monster_head.add_child(mouth_mi)
-
-	var tooth_box = BoxMesh.new()
-	tooth_box.size = Vector3(0.015, 0.025, 0.01)
-	for i in range(5):
-		var dx = (i - 2) * 0.022
-		var t_up = MeshInstance3D.new()
-		t_up.mesh = tooth_box
-		t_up.material_override = eye_mat
-		t_up.position = Vector3(dx, -0.065, 0.2)
-		previz_monster_head.add_child(t_up)
-
-		var t_down = MeshInstance3D.new()
-		t_down.mesh = tooth_box
-		t_down.material_override = eye_mat
-		t_down.position = Vector3(dx, -0.115, 0.2)
-		previz_monster_head.add_child(t_down)
-
-	var eye_glow = OmniLight3D.new()
-	eye_glow.light_color = Color("#ffffff")
-	eye_glow.light_energy = 0.45
-	eye_glow.omni_range = 1.1
-	eye_glow.position = Vector3(0.0, 0.05, 0.25)
-	previz_monster_head.add_child(eye_glow)
-
-	var arm_mesh = BoxMesh.new()
-	arm_mesh.size = Vector3(0.08, 1.35, 0.08)
-
-	previz_monster_arm_l = Node3D.new()
-	previz_monster_arm_l.position = Vector3(-0.35, 1.45, 0.0)
-	previz_monster_arm_l.rotation_degrees = Vector3(0.0, 0.0, -28.0)
-	previz_monster_root.add_child(previz_monster_arm_l)
-	var arm_l_mi = MeshInstance3D.new()
-	arm_l_mi.mesh = arm_mesh
-	arm_l_mi.material_override = body_mat
-	arm_l_mi.position = Vector3(0.0, -0.6, 0.05)
-	previz_monster_arm_l.add_child(arm_l_mi)
-
-	previz_monster_arm_r = Node3D.new()
-	previz_monster_arm_r.position = Vector3(0.35, 1.45, 0.0)
-	previz_monster_arm_r.rotation_degrees = Vector3(0.0, 0.0, 28.0)
-	previz_monster_root.add_child(previz_monster_arm_r)
-	var arm_r_mi = MeshInstance3D.new()
-	arm_r_mi.mesh = arm_mesh
-	arm_r_mi.material_override = body_mat
-	arm_r_mi.position = Vector3(0.0, -0.6, 0.05)
-	previz_monster_arm_r.add_child(arm_r_mi)
-
-	var leg_mesh = BoxMesh.new()
-	leg_mesh.size = Vector3(0.09, 0.75, 0.09)
-
-	previz_monster_leg_l = Node3D.new()
-	previz_monster_leg_l.position = Vector3(-0.14, 0.55, 0.0)
-	previz_monster_root.add_child(previz_monster_leg_l)
-	var leg_l_mi = MeshInstance3D.new()
-	leg_l_mi.mesh = leg_mesh
-	leg_l_mi.material_override = body_mat
-	leg_l_mi.position = Vector3(0.0, -0.32, 0.0)
-	previz_monster_leg_l.add_child(leg_l_mi)
-
-	previz_monster_leg_r = Node3D.new()
-	previz_monster_leg_r.position = Vector3(0.14, 0.55, 0.0)
-	previz_monster_root.add_child(previz_monster_leg_r)
-	var leg_r_mi = MeshInstance3D.new()
-	leg_r_mi.mesh = leg_mesh
-	leg_r_mi.material_override = body_mat
-	leg_r_mi.position = Vector3(0.0, -0.32, 0.0)
-	previz_monster_leg_r.add_child(leg_r_mi)
+	# 5. Golpe de estática blanca (0.22s) al cambiar de fase (m1 -> m2 -> m3) o de cámara
+	cam_static_burst_rect = ColorRect.new()
+	cam_static_burst_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	cam_static_burst_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cam_static_burst_rect.material = _create_fnaf_static_burst_material()
+	cam_static_burst_rect.visible = false
+	layer.add_child(cam_static_burst_rect)
 
 	var cam_crt = _create_portrait_crt_overlay(Color(0.02, 0.95, 0.75, 1.0))
 	layer.add_child(cam_crt)
+
+	# OVERLAY DE PANTALLA INHABILITADA POR LA NIÑA FANTASMA O EL RADAR
+	previz_screen_blackout_overlay = ColorRect.new()
+	previz_screen_blackout_overlay.color = Color(0.12, 0.01, 0.04, 0.96)
+	previz_screen_blackout_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	previz_screen_blackout_overlay.visible = false
+	layer.add_child(previz_screen_blackout_overlay)
+
+	lbl_previz_blackout_msg = Label.new()
+	lbl_previz_blackout_msg.text = "👻 ¡SEÑAL DE VIDEO PERDIDA!\n\nLA NIÑA INHABILITÓ LAS CÁMARAS\n[CALIBRÁ LAS PERILLAS EN TAB 02]"
+	lbl_previz_blackout_msg.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl_previz_blackout_msg.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl_previz_blackout_msg.add_theme_font_size_override("font_size", 11)
+	lbl_previz_blackout_msg.modulate = Color("#ff4466")
+	lbl_previz_blackout_msg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	previz_screen_blackout_overlay.add_child(lbl_previz_blackout_msg)
 
 	var cam_top_bar = PanelContainer.new()
 	cam_top_bar.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
@@ -2837,7 +3188,7 @@ func _build_3d_camera_previz() -> Control:
 	layer.add_child(cam_bot_bar)
 
 	lbl_previz_cam_alert = Label.new()
-	lbl_previz_cam_alert.text = "☣️ SUBJECT-ZERO DETECTED"
+	lbl_previz_cam_alert.text = "USÁ EL FLASH PARA VER EN LA PENUMBRA"
 	lbl_previz_cam_alert.add_theme_font_size_override("font_size", 10)
 	lbl_previz_cam_alert.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lbl_previz_cam_alert.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
@@ -2846,76 +3197,290 @@ func _build_3d_camera_previz() -> Control:
 	return frame
 
 func _update_3d_previz(delta: float) -> void:
-	if not is_instance_valid(previz_monster_root) or not is_instance_valid(previz_cam_3d):
+	if not is_instance_valid(cam_pan_root):
 		return
 
+	var video_down: bool = (camera_disabled_timer > 0.0 or light_hacked_by_monster or not companion_pc_unlocked)
+	if is_instance_valid(previz_screen_blackout_overlay):
+		previz_screen_blackout_overlay.visible = video_down
+		if video_down:
+			var flicker = 0.15 + 0.20 * abs(sin(pulse_phase * 6.0)) + ghost_jumpscare_flash * 0.5
+			previz_screen_blackout_overlay.color = Color(flicker, 0.01, 0.04, 0.96)
+			if is_instance_valid(lbl_previz_blackout_msg):
+				if not companion_pc_unlocked and not (camera_disabled_timer > 0.0 or light_hacked_by_monster):
+					lbl_previz_blackout_msg.text = "🚨 ¡TERMINAL HACKEADA!\n\nCÁMARAS BLOQUEADAS Y AVANCE ACELERADO\n[INGRESÁ EL CÓDIGO EN TAB 03]"
+				else:
+					lbl_previz_blackout_msg.text = "👻 ¡SEÑAL DE VIDEO PERDIDA!\n\nLA NIÑA INHABILITÓ LAS CÁMARAS\n[CALIBRÁ LAS PERILLAS EN TAB 02]"
+
 	var monster_node = _get_monster_node_id() if monster_attack_active else ""
-	var monster_in_this_cam = monster_attack_active and (selected_cam_id == monster_node)
-	previz_monster_root.visible = monster_in_this_cam
+	var monster_in_this_cam = (not video_down) and monster_attack_active and (selected_cam_id == monster_node)
+	var ghost_in_this_cam = (not video_down) and (ghost_active_cam != "" and selected_cam_id == ghost_active_cam)
+	var d_state = door_node_states.get(selected_cam_id, "OPEN")
+
 	if monster_in_this_cam:
 		monster_spotted_on_cam = true
 
-	previz_cam_3d.rotation_degrees.y = sin(pulse_phase * 0.22) * 3.2
+	# 1. CALCULAR EL ESTADO ACTUAL (VACÍO / M1 / M2 / M3 / FANTASMA)
+	var new_stage: int = 0
+	var new_state_key: String = "EMPTY_" + selected_cam_id
+	if ghost_in_this_cam:
+		new_stage = 4 if (ghost_jumpscare_playing or ghost_forced_attack_timer > 0.0) else 1
+		new_state_key = "GHOST_%d_%s" % [new_stage, selected_cam_id]
+	elif monster_in_this_cam and d_state != "LOCKED":
+		if monster_hack_progress >= 74.0:
+			new_stage = 3 # hall1_m3.jpg (Pegado a la lente)
+		elif monster_hack_progress >= 38.0:
+			new_stage = 2 # hall1_m2.jpg (Asomado en la puerta izquierda)
+		else:
+			new_stage = 1 # hall1_m1.jpg (Ojos al fondo del pasillo)
+		new_state_key = "M_STAGE_%d_%s" % [new_stage, selected_cam_id]
+	elif d_state == "LOCKED":
+		new_state_key = "LOCKED_" + selected_cam_id
 
-	var d_state = door_node_states.get(selected_cam_id, "OPEN")
-	if is_instance_valid(previz_door_mesh):
-		var target_door_y = 1.28 if d_state == "LOCKED" else 3.85
-		previz_door_mesh.position.y = lerpf(previz_door_mesh.position.y, target_door_y, clampf(delta * 8.0 if delta > 0.0 else 1.0, 0.1, 1.0))
+	# Si cambió de fase o cambiaste de cámara, mete golpe de estática y cambia la foto
+	if new_state_key != current_fnaf_state_key:
+		current_fnaf_state_key = new_state_key
+		current_monster_stage = new_stage
+		cam_static_timer = 0.22
+		_apply_fnaf_state_texture(ghost_in_this_cam, monster_in_this_cam and d_state != "LOCKED", new_stage)
 
-	if monster_in_this_cam:
-		if monster_attack_active and monster_is_moving and game_active:
-			var walk_spd = 7.5 if music_box_charge < 40.0 else 4.6
-			previz_walk_phase = fmod(previz_walk_phase + delta * walk_spd, TAU)
-		var t = clampf(monster_hack_progress / 100.0, 0.0, 1.0) if monster_attack_active else 0.0
-		var z_pos = lerpf(-6.8, 1.15, t)
-		var x_sway = (sin(previz_walk_phase) * 0.18) if (monster_attack_active and monster_is_moving) else 0.0
-		var y_bob = (abs(sin(previz_walk_phase * 2.0)) * 0.10) if (monster_attack_active and monster_is_moving) else 0.0
-		previz_monster_root.position = Vector3(x_sway, y_bob, z_pos)
-		previz_monster_root.rotation.z = (sin(previz_walk_phase) * 0.07) if (monster_attack_active and monster_is_moving) else 0.0
+	if cam_static_timer > 0.0:
+		cam_static_timer = max(0.0, cam_static_timer - delta)
+	if is_instance_valid(cam_static_burst_rect):
+		cam_static_burst_rect.visible = (cam_static_timer > 0.0 and not video_down)
 
-		if is_instance_valid(previz_monster_arm_l) and is_instance_valid(previz_monster_arm_r):
-			var arm_swing = sin(previz_walk_phase) * 0.35 if (monster_attack_active and monster_is_moving) else 0.0
-			previz_monster_arm_l.rotation.x = -0.35 + arm_swing
-			previz_monster_arm_r.rotation.x = -0.35 - arm_swing
-			previz_monster_arm_l.rotation.z = deg_to_rad(-26.0) - abs(arm_swing) * 0.2
-			previz_monster_arm_r.rotation.z = deg_to_rad(26.0) + abs(arm_swing) * 0.2
-		if is_instance_valid(previz_monster_leg_l) and is_instance_valid(previz_monster_leg_r):
-			var leg_swing = sin(previz_walk_phase) * 0.45 if (monster_attack_active and monster_is_moving) else 0.0
-			previz_monster_leg_l.rotation.x = -leg_swing
-			previz_monster_leg_r.rotation.x = leg_swing
-		if is_instance_valid(previz_monster_head):
-			previz_monster_head.rotation.z = sin(pulse_phase * 1.3) * 0.14
-			previz_monster_head.rotation.y = (sin(pulse_phase * 1.7) * 0.18) if (monster_attack_active and monster_is_moving) else 0.0
+	if is_instance_valid(cam_door_bars_overlay):
+		cam_door_bars_overlay.visible = (d_state == "LOCKED" and not video_down)
+		if cam_door_bars_overlay.visible:
+			cam_door_bars_overlay.queue_redraw()
 
-		if is_instance_valid(previz_room_light):
-			previz_room_light.light_color = Color("#3cd070") if not monster_is_moving else Color("#2ea866")
-			previz_room_light.light_energy = 1.15 + sin(pulse_phase * 4.0) * 0.25
-	else:
-		if is_instance_valid(previz_room_light):
-			if flash_stun_grace > 0.0:
-				previz_room_light.light_color = Color("#ffffff")
-				previz_room_light.light_energy = 3.2
-			else:
-				previz_room_light.light_color = Color("#00ff9d") if d_state == "LOCKED" else Color("#3cd070")
-				previz_room_light.light_energy = 1.05
+	_update_ghost_video(ghost_in_this_cam)
 
+	if is_instance_valid(cam_ghost_overlay):
+		cam_ghost_overlay.visible = (ghost_in_this_cam and not is_instance_valid(tex_ghost_girl_state) and not _ghost_video_available())
+		if cam_ghost_overlay.visible:
+			cam_ghost_overlay.queue_redraw()
+
+	# 2. PANEO HORIZONTAL ESTILO FNAF (Recorre tu imagen widescreen de izquierda a derecha)
+	var parent_w: float = max(215.0, cam_pan_root.get_parent_area_size().x)
+	var parent_h: float = max(180.0, cam_pan_root.get_parent_area_size().y)
+	var extra_w: float = parent_w * 0.38 # 38% de recorrido lateral para aprovechar el formato 2.39:1
+	# El paneo arranca en el CENTRO y se va hacia la DERECHA. Se reinicia al cambiar de cámara.
+	if cam_pan_last_cam_id != selected_cam_id:
+		cam_pan_last_cam_id = selected_cam_id
+		cam_pan_time = 0.0
+	cam_pan_time += delta
+	var pan_move_time: float = max(0.0, cam_pan_time - CAM_PAN_INITIAL_HOLD)
+	var pan_wave: float = clampf(sin(pan_move_time * 0.55) * 1.35, -1.0, 1.0)
+	var pan_norm: float = pan_wave * 0.5 + 0.5
+
+	var shake_vec := Vector2.ZERO
+	if ghost_in_this_cam and (ghost_jumpscare_playing or ghost_forced_attack_timer > 0.0):
+		shake_vec = Vector2(randf_range(-8.0, 8.0), randf_range(-5.0, 5.0))
+
+	cam_pan_root.size = Vector2(parent_w + extra_w, parent_h)
+	cam_pan_root.position = Vector2(-extra_w * pan_norm, 0.0) + shake_vec
+
+	# 3. ACTUALIZAR EL DESTELLO DEL FLASH EN EL SHADER
+	if is_instance_valid(cam_lens_mat):
+		var flash_val: float = clampf(flash_stun_grace / 1.15, 0.0, 1.0)
+		cam_lens_mat.set_shader_parameter("flash_active", flash_val)
+
+	# 4. TEXTOS DE ALERTA DEL VISOR
 	if is_instance_valid(lbl_previz_cam_title):
 		lbl_previz_cam_title.text = "🎥 CAM C%s // PUERTA: %s" % [selected_cam_id, "CERRADA" if d_state == "LOCKED" else "ABIERTA"]
 		lbl_previz_cam_title.modulate = Color("#00ff9d") if d_state == "LOCKED" else Color("#00f0ff")
+
 	if is_instance_valid(lbl_previz_cam_alert):
-		if not monster_attack_active:
-			lbl_previz_cam_alert.text = "SIN RASTRO — LA ENTIDAD ESTÁ OCULTA"
-			lbl_previz_cam_alert.modulate = Color("#557799")
-		elif monster_in_this_cam:
-			if d_state == "LOCKED":
-				lbl_previz_cam_alert.text = "🚪 BLOQUEADO EN PUERTA C%s (%0.1fs)..." % [selected_cam_id, door_hold_timer]
-				lbl_previz_cam_alert.modulate = Color("#00ff9d")
+		if video_down:
+			lbl_previz_cam_alert.text = "🚨 SIN SEÑAL — REPARAR SISTEMA"
+			lbl_previz_cam_alert.modulate = Color("#ff1744")
+		elif ghost_in_this_cam:
+			if ghost_jumpscare_playing or ghost_forced_attack_timer > 0.0:
+				lbl_previz_cam_alert.text = "👻 ¡ATAQUE PHANTOM! ¡SEÑAL COLAPSANDO!"
 			else:
-				lbl_previz_cam_alert.text = "☣️ ENTIDAD EN CAM C%s (%d%%)" % [selected_cam_id, int(monster_hack_progress)]
-				lbl_previz_cam_alert.modulate = Color("#ff1744")
+				var rem = max(0.0, GHOST_MAX_STARE_TIME - ghost_stare_timer)
+				lbl_previz_cam_alert.text = "👻 ¡ANOMALÍA (%d/%d)! ¡CAMBIÁ DE CÁMARA YA (%0.1fs)!" % [ghost_encounters_count, GHOST_MAX_ENCOUNTERS, rem]
+			lbl_previz_cam_alert.modulate = Color("#ff1744")
+		elif monster_in_this_cam and d_state != "LOCKED":
+			if selected_cam_id == "4":
+				lbl_previz_cam_alert.text = "☣️ ¡FASE %d/3 EN PUERTA C4! ¡CERRALA!" % current_monster_stage
+			else:
+				lbl_previz_cam_alert.text = "☣️ ¡FASE %d/3 EN C%s! ¡DISPARÁ EL FLASH [🔦]!" % [current_monster_stage, selected_cam_id]
+			lbl_previz_cam_alert.modulate = Color("#ff1744") if current_monster_stage == 3 else Color("#ffaa00")
 		else:
-			lbl_previz_cam_alert.text = "PASILLO C%s DESPEJADO" % selected_cam_id
-			lbl_previz_cam_alert.modulate = Color("#7799bb")
+			lbl_previz_cam_alert.text = "PASILLO C%s EN LÍNEA" % selected_cam_id
+			lbl_previz_cam_alert.modulate = Color("#6688aa")
+
+func _apply_fnaf_state_texture(ghost_here: bool, monster_here: bool, stage: int) -> void:
+	if not is_instance_valid(cam_state_tex_rect):
+		return
+	var chosen_tex: Texture2D = tex_cam_empty
+	if ghost_here and is_instance_valid(tex_ghost_girl_state):
+		chosen_tex = tex_ghost_girl_state
+	elif monster_here:
+		match stage:
+			1: chosen_tex = tex_monster_stage_1 if is_instance_valid(tex_monster_stage_1) else tex_cam_empty
+			2: chosen_tex = tex_monster_stage_2 if is_instance_valid(tex_monster_stage_2) else tex_cam_empty
+			3: chosen_tex = tex_monster_stage_3 if is_instance_valid(tex_monster_stage_3) else tex_cam_empty
+	cam_state_tex_rect.texture = chosen_tex
+
+# =========================================================
+# VIDEO DE LA NIÑA FANTASMA: IDLE (0:00-1:00) + JUMPSCARE (1:00-2:00)
+# =========================================================
+func _load_ghost_videos() -> void:
+	if ghost_video_path != "" and ResourceLoader.exists(ghost_video_path):
+		ghost_stream = load(ghost_video_path)
+
+func _ghost_video_available() -> bool:
+	return is_instance_valid(ghost_video_player) and ghost_stream != null
+
+func _update_ghost_video(ghost_here: bool) -> void:
+	if not _ghost_video_available():
+		return
+	if ghost_jumpscare_playing:
+		ghost_video_container.visible = true
+		return
+	if ghost_here:
+		# Aparece la Niña: el video arranca en 0:00 (parada mirando a cámara)
+		if ghost_video_mode != "idle":
+			ghost_video_mode = "idle"
+			ghost_video_player.stream = ghost_stream
+			ghost_video_player.play()
+		ghost_video_container.visible = true
+	elif ghost_video_mode != "":
+		ghost_video_mode = ""
+		ghost_video_player.stop()
+		ghost_video_container.visible = false
+
+# direct = true: salta al segundo 1.0 (jumpscare). direct = false: el video ya corre y sigue solo hacia 1:00-2:00.
+# Sin video cargado, cae al jumpscare instantáneo de siempre.
+func _begin_ghost_jumpscare(reason: String, direct: bool = false) -> void:
+	if ghost_jumpscare_playing:
+		return
+	if not _ghost_video_available():
+		_trigger_ghost_girl_jumpscare(reason)
+		return
+	ghost_jumpscare_playing = true
+	ghost_jumpscare_reason = reason
+	var was_running: bool = (ghost_video_mode == "idle" and ghost_video_player.is_playing())
+	ghost_video_mode = "jumpscare"
+	ghost_video_container.visible = true
+	if not was_running:
+		ghost_video_player.stream = ghost_stream
+		ghost_video_player.play()
+	if direct:
+		ghost_video_player.stream_position = GHOST_JUMPSCARE_START
+		ghost_seek_check_timer = 0.25
+		ghost_jumpscare_timer = GHOST_VIDEO_LENGTH - GHOST_JUMPSCARE_START + 0.1
+	else:
+		ghost_jumpscare_timer = maxf(0.1, GHOST_VIDEO_LENGTH - ghost_video_player.stream_position + 0.1)
+	if is_instance_valid(sfx_scare_player):
+		sfx_scare_player.pitch_scale = randf_range(0.92, 1.08)
+		sfx_scare_player.play()
+	_update_3d_previz(0.0)
+
+func _on_ghost_video_finished() -> void:
+	if ghost_video_mode == "jumpscare":
+		_finish_ghost_jumpscare()
+
+func _finish_ghost_jumpscare() -> void:
+	if not ghost_jumpscare_playing:
+		return
+	var reason: String = ghost_jumpscare_reason
+	ghost_jumpscare_playing = false
+	_trigger_ghost_girl_jumpscare(reason)
+
+func _reset_ghost_video() -> void:
+	ghost_jumpscare_playing = false
+	ghost_jumpscare_timer = 0.0
+	ghost_seek_check_timer = 0.0
+	ghost_video_mode = ""
+	if is_instance_valid(ghost_video_player):
+		ghost_video_player.stop()
+	if is_instance_valid(ghost_video_container):
+		ghost_video_container.visible = false
+
+# SHADER QUE ESTIRA LOS BORDES LATERALES (ESTILO FNAF) Y REALZA EL BRILLO CON EL FLASH
+func _create_fnaf_lens_warp_material() -> ShaderMaterial:
+	var sh = Shader.new()
+	sh.code = """
+shader_type canvas_item;
+uniform sampler2D SCREEN_TEXTURE : hint_screen_texture, filter_nearest;
+uniform float edge_stretch : hint_range(0.0, 1.0) = 0.44;
+uniform float flash_active : hint_range(0.0, 1.0) = 0.0;
+
+void fragment() {
+	vec2 uv = SCREEN_UV;
+	float dx = uv.x - 0.5;
+	float dy = uv.y - 0.5;
+	// Estiramiento horizontal y curvatura vertical en los extremos izquierdo y derecho
+	float stretch_x = dx * (1.0 - edge_stretch * (dx * dx * 3.1));
+	float pinch_y = dy * (1.0 + edge_stretch * (dx * dx * 1.9));
+	vec2 warped_uv = clamp(vec2(0.5 + stretch_x, 0.5 + pinch_y), vec2(0.002), vec2(0.998));
+
+	vec3 col = texture(SCREEN_TEXTURE, warped_uv).rgb;
+
+	// Tus renders ya tienen la oscuridad ideal (1.0); el Flash levanta las sombras del pasillo
+	float dist_center = length(vec2(dx * 1.1, dy));
+	float flash_cone = clamp(1.0 - dist_center * 1.35, 0.0, 1.0);
+	col = col * (1.0 + flash_active * flash_cone * 2.4) + vec3(0.10, 0.14, 0.12) * flash_active * flash_cone;
+
+	COLOR = vec4(clamp(col, vec3(0.0), vec3(1.0)), 1.0);
+}
+"""
+	var mat = ShaderMaterial.new()
+	mat.shader = sh
+	return mat
+
+func _create_fnaf_static_burst_material() -> ShaderMaterial:
+	var sh = Shader.new()
+	sh.code = """
+shader_type canvas_item;
+
+void fragment() {
+	vec2 p = floor(UV * vec2(160.0, 110.0));
+	float n = fract(sin(dot(p + vec2(TIME * 73.1, TIME * 19.7), vec2(12.9898, 78.233))) * 43758.5453);
+	float bars = step(0.35, fract(UV.y * 18.0 + TIME * 14.0));
+	float val = mix(n, 1.0, bars * 0.35);
+	COLOR = vec4(vec3(val), 0.88);
+}
+"""
+	var mat = ShaderMaterial.new()
+	mat.shader = sh
+	return mat
+
+func _draw_locked_door_over_hallway() -> void:
+	if not is_instance_valid(cam_door_bars_overlay):
+		return
+	var s: Vector2 = cam_door_bars_overlay.size
+	cam_door_bars_overlay.draw_rect(Rect2(0.0, 0.0, s.x, s.y), Color(0.03, 0.08, 0.06, 0.82), true)
+	for y_bar in range(16, int(s.y), 24):
+		cam_door_bars_overlay.draw_line(Vector2(0.0, y_bar), Vector2(s.x, y_bar), Color("#183829"), 6.0)
+	cam_door_bars_overlay.draw_rect(Rect2(4.0, 4.0, s.x - 8.0, s.y - 8.0), Color("#00ff9d"), false, 2.5)
+
+func _draw_ghost_over_hallway() -> void:
+	if not is_instance_valid(cam_ghost_overlay):
+		return
+	var s: Vector2 = cam_ghost_overlay.size
+	var cx: float = s.x * 0.5
+	var cy: float = s.y * 0.50
+	var g_scale: float = 1.45 if current_monster_stage == 4 else 1.0
+	var head_c := Vector2(cx, cy - 16.0 * g_scale)
+	cam_ghost_overlay.draw_rect(Rect2(cx - 22.0 * g_scale, head_c.y + 22.0 * g_scale, 44.0 * g_scale, 95.0 * g_scale), Color("#070506"), true)
+	for rib_i in range(4):
+		var ry: float = head_c.y + (42.0 + rib_i * 10.0) * g_scale
+		cam_ghost_overlay.draw_line(Vector2(cx - 14.0 * g_scale, ry), Vector2(cx + 14.0 * g_scale, ry), Color("#4a3f39"), 2.0)
+	cam_ghost_overlay.draw_rect(Rect2(cx - 3.0 * g_scale, head_c.y + 30.0 * g_scale, 6.0 * g_scale, 14.0 * g_scale), Color.WHITE, true)
+	for side in [-1.0, 1.0]:
+		for n_i in range(3):
+			cam_ghost_overlay.draw_line(head_c + Vector2(side * 18.0 * g_scale, (n_i - 1) * 5.0), head_c + Vector2(side * 58.0 * g_scale, (n_i - 1) * 11.0 - 6.0), Color("#4a3f39"), 1.5)
+	cam_ghost_overlay.draw_circle(head_c, 24.0 * g_scale, Color("#c8cdd0"))
+	cam_ghost_overlay.draw_circle(head_c + Vector2(-9.0 * g_scale, -2.0), 6.0 * g_scale, Color("#040406"))
+	cam_ghost_overlay.draw_circle(head_c + Vector2(9.0 * g_scale, -2.0), 6.0 * g_scale, Color("#040406"))
+	cam_ghost_overlay.draw_circle(head_c + Vector2(-9.0 * g_scale, -2.0), 2.0 * g_scale, Color.WHITE)
+	cam_ghost_overlay.draw_circle(head_c + Vector2(9.0 * g_scale, -2.0), 2.0 * g_scale, Color.WHITE)
+	cam_ghost_overlay.draw_arc(head_c + Vector2(0.0, 4.0 * g_scale), 11.0 * g_scale, 0.2, PI - 0.2, 12, Color("#040406"), 2.5 * g_scale)
 
 func _count_locked_doors() -> int:
 	var cnt: int = 0
@@ -2930,80 +3495,60 @@ func _force_open_all_doors_on_power_outage() -> void:
 			door_node_states[k] = "OPEN"
 	door_hold_timer = 0.0
 	door_hold_target_time = -1.0
-	_log_chat("APAGÓN_ELÉCTRICO", "⚡ ¡ENERGÍA AL 0%! Todas las puertas magnéticas se abrieron por falta de corriente! Impulsá la Turbina [Tab 01] para recuperar energía!", "#ff1744")
 	_select_camera(selected_cam_id)
 	_update_terminal_lock_state()
 	_refresh_lure_tab_ui()
 
 func _on_open_all_doors_pressed() -> void:
-	var opened_any = false
 	for k in door_node_states.keys():
 		if door_node_states[k] == "LOCKED":
 			door_node_states[k] = "OPEN"
-			opened_any = true
 	door_hold_timer = 0.0
 	door_hold_target_time = -1.0
-	if opened_any:
-		_log_chat("SISTEMA", "🔓 Abriste todas las puertas para ahorrar Energía eléctrica.", "#00ff9d")
 	_select_camera(selected_cam_id)
 	_update_terminal_lock_state()
 	_refresh_lure_tab_ui()
 
+# --- CERO SPOILERS EN EL TEXTO DE PUERTAS ---
 func _update_terminal_lock_state() -> void:
 	if not is_instance_valid(current_mission) or not is_instance_valid(btn_inject):
 		return
 
-	# Solo existe un botón: cierra o abre ÚNICAMENTE la cámara que el jugador tiene seleccionada
 	var sel_closed: bool = (door_node_states.get(selected_cam_id, "OPEN") == "LOCKED")
 	btn_inject.visible = true
-	btn_inject.text = ("🔓 ABRIR CAM ACTUAL [C%s]" % selected_cam_id) if sel_closed else ("🚪 CERRAR CAM ACTUAL [C%s]" % selected_cam_id)
+	btn_inject.text = ("🔓 ABRIR COMPUERTA [C%s]" % selected_cam_id) if sel_closed else ("🚪 CERRAR COMPUERTA [C%s] (1 MÁX)" % selected_cam_id)
 	_apply_styled_button(btn_inject, Color("#00ff9d") if sel_closed else Color("#00f0ff"), true)
 
-	if is_instance_valid(btn_seal_door_b):
-		btn_seal_door_b.visible = false
-	if is_instance_valid(btn_seal_door_c):
-		btn_seal_door_c.visible = false
+	var locked_cam: String = ""
+	for k in door_node_states.keys():
+		if door_node_states[k] == "LOCKED":
+			locked_cam = k
+			break
 
 	if power_energy <= 0.0:
-		lbl_lock_banner.text = "🚨 ¡SIN ENERGÍA (0%)! No podés mantener puertas cerradas hasta recuperar la Turbina en [Tab 01]."
+		lbl_lock_banner.text = "🚨 ¡SIN ENERGÍA (0%)! Todas las compuertas magnéticas están desenergizadas."
 		lbl_lock_banner.modulate = Color("#ff1744")
-	elif not monster_attack_active:
-		lbl_lock_banner.text = "🔇 El monstruo desapareció y volverá en un momento impredecible. Abrí las puertas con [🔓 ABRIR TODAS] para ahorrar Energía."
-		lbl_lock_banner.modulate = Color("#88ccee")
+	elif locked_cam != "":
+		lbl_lock_banner.text = "🚪 Compuerta [C%s] CERRADA consumiendo Energía (-2.4%%/s). Escuchá el golpe metálico (THUD!) para saber cuándo rebotó el monstruo." % locked_cam
+		lbl_lock_banner.modulate = Color("#00ff9d")
 	else:
-		var cur_monster_node: String = _get_monster_node_id()
-		var is_monster_door_closed: bool = (door_node_states.get(cur_monster_node, "OPEN") == "LOCKED")
-		if is_monster_door_closed:
-			lbl_lock_banner.text = "🚪 ¡PUERTA [C%s] CERRADA CON ÉXITO! El monstruo está bloqueado (se irá en %0.1fs / %0.1fs)..." % [cur_monster_node, door_hold_timer, max(0.1, door_hold_target_time)]
-			lbl_lock_banner.modulate = Color("#00ff9d")
-		elif selected_cam_id == cur_monster_node:
-			lbl_lock_banner.text = "🚨 ¡LO ENCONTRASTE EN [CAM C%s]! ¡Cerrale la puerta de esta cámara o prendé la Luz antes de que avance!" % selected_cam_id
-			lbl_lock_banner.modulate = Color("#ff1744")
-		else:
-			lbl_lock_banner.text = "🚨 ATAQUE EN CURSO: Buscá al monstruo en las cámaras [%s], entrá a su cámara y cerrale la puerta!" % _stage_doors_text(monster_security_level)
-			lbl_lock_banner.modulate = Color("#ffcc44")
+		lbl_lock_banner.text = "En C1..C3 usá el [🔦 FLASH] para hacerlo retroceder. En C4 cerrá la Compuerta Blindada hasta escuchar el golpe."
+		lbl_lock_banner.modulate = Color("#ffcc44")
 
 func _update_companion_perk_ui() -> void:
 	if not is_instance_valid(current_mission) or not is_instance_valid(lbl_perk_status) or not is_instance_valid(btn_companion_perk):
 		return
 	if current_mission.companion_perk == "prediction":
-		if not monster_attack_active:
-			lbl_perk_status.text = "🔮 MIA: EN ESPERA"
-			lbl_perk_status.modulate = Color("#88aacc")
-			btn_companion_perk.text = "🔮 ESPERANDO QUE REAPAREZCA PARA RASTREAR"
-			btn_companion_perk.disabled = true
-			_apply_styled_button(btn_companion_perk, Color("#667788"), false)
-			return
-		lbl_perk_status.text = "🔮 RASTREO: Cam [C%s]" % _get_monster_node_id()
-		lbl_perk_status.modulate = Color("#f600ff")
-		btn_companion_perk.text = "🔮 MIA: MARCAR CÁMARA + ALINEAR PERILLAS Y PC" if mia_prediction_ready else "🔮 RASTREO USADO EN ESTA OLEADA"
+		lbl_perk_status.text = "🔮 RASTREO LISTO" if mia_prediction_ready else "🔮 EN ENFRIAMIENTO"
+		lbl_perk_status.modulate = Color("#f600ff") if mia_prediction_ready else Color("#88aacc")
+		btn_companion_perk.text = "🔮 MIA: ESCANEAR CÁMARAS + RESTAURAR VIDEO" if mia_prediction_ready else "🔮 RASTREO USADO EN ESTA OLEADA"
 		btn_companion_perk.disabled = not mia_prediction_ready
 		_apply_styled_button(btn_companion_perk, Color("#f600ff"), mia_prediction_ready)
 	else:
 		if naomi_shield_charges > 0:
 			lbl_perk_status.text = "🛡️ NAOMI: ESCUDO LISTO"
 			lbl_perk_status.modulate = Color("#00ff9d")
-			btn_companion_perk.text = "🛡️ NAOMI: RECARGAR ENERGÍA + ENFRIAR TURBINA" if (monster_attack_active or _count_active_errors() > 0 or power_energy < 70.0) else "🛡️ ESCUDO AUXILIAR LISTO"
+			btn_companion_perk.text = "🛡️ NAOMI: RECARGAR ENERGÍA + REPARAR CÁMARAS"
 			btn_companion_perk.disabled = false
 			_apply_styled_button(btn_companion_perk, Color("#00ff9d"), true)
 		else:
@@ -3020,40 +3565,32 @@ func _on_companion_perk_pressed() -> void:
 		if not monster_attack_active or not mia_prediction_ready:
 			return
 		mia_prediction_ready = false
+		ghost_active_cam = ""
+		_sync_knobs_aligned()
 		monster_spotted_on_cam = true
 		_select_camera(_get_monster_node_id())
-		_sync_knobs_aligned()
 		music_box_charge = min(100.0, music_box_charge + 25.0)
-		monster_hack_progress = max(0.0, monster_hack_progress - 22.0)
-		if not companion_pc_unlocked and entered_sequence.size() < target_sequence.size():
-			var expected_token: String = target_sequence[entered_sequence.size()]
-			for idx in range(5):
-				var rr = active_index if selecting_row else idx
-				var cc = idx if selecting_row else active_index
-				if not used_cells.has(Vector2i(rr, cc)) and matrix_grid[rr][cc] == expected_token:
-					_on_matrix_cell_pressed(rr, cc)
-					break
-		_log_chat("MIA_PERK", "🔮 [MIA]: «¡Subject-Zero está en [C%s]! Alineé las perillas de luz por vos y avancé el desbloqueo!»" % _get_monster_node_id(), "#f600ff")
+		monster_hack_progress = max(0.0, monster_hack_progress - 20.0)
 		_update_companion_perk_ui()
 	else:
 		if naomi_shield_charges <= 0:
 			return
+		ghost_active_cam = ""
 		temp_hacked_by_monster = false
 		_sync_knobs_aligned()
 		companion_pc_unlocked = true
 		power_energy = min(100.0, power_energy + 35.0)
 		bunker_temperature = max(NORMAL_TEMP, bunker_temperature - 25.0)
 		music_box_charge = min(100.0, music_box_charge + 35.0)
-		monster_hack_progress = max(0.0, monster_hack_progress - 30.0)
+		monster_hack_progress = max(0.0, monster_hack_progress - 25.0)
 		bpm = max(75, bpm - 12)
-		_log_chat("NAOMI_PERK", "🛡️ [NAOMI]: «¡Inyecté +35% de Energía, enfrié la Turbina, alineé las perillas y desbloqueé mi PC!»", "#00ff9d")
 		_refresh_lure_tab_ui()
 		_update_turbine_ui()
 		_update_terminal_lock_state()
 		_update_hud()
 
 # =========================================================
-# 5. DIBUJO DEL MAPA 3 - 2 - 2 - 1, MEDIDORES Y ECG
+# 5. DIBUJO DEL MAPA CON RADAR DE NIVEL DE LA COMPAÑERA
 # =========================================================
 func _update_energy_and_temp_hud() -> void:
 	if is_instance_valid(lbl_energy_val):
@@ -3064,17 +3601,17 @@ func _update_energy_and_temp_hud() -> void:
 
 	if is_instance_valid(lbl_temp_val):
 		lbl_temp_val.text = "%d°C" % int(round(bunker_temperature))
-		lbl_temp_val.modulate = Color("#ff1744") if bunker_temperature >= 75.0 else (Color("#ffaa00") if bunker_temperature >= 48.0 else Color("#00f0ff"))
+		lbl_temp_val.modulate = Color("#ff1744") if bunker_temperature >= 75.0 else (Color("#ffaa00") if bunker_temperature >= 45.0 else Color("#00f0ff"))
 	if is_instance_valid(bar_temperature):
 		bar_temperature.value = bunker_temperature
 
 	if is_instance_valid(lbl_companion_hack_status):
 		var c_name = current_mission.agent_name.to_upper() if is_instance_valid(current_mission) else "COMPAÑERA"
 		if companion_pc_unlocked:
-			lbl_companion_hack_status.text = "👩‍💻 %s: REDUCIENDO HACKEO" % c_name
+			lbl_companion_hack_status.text = "👩‍💻 RADAR %s: ACTIVO" % c_name
 			lbl_companion_hack_status.modulate = Color("#00ff9d")
 		else:
-			lbl_companion_hack_status.text = "🔒 PC %s: BLOQUEADA (TAB 03)" % c_name
+			lbl_companion_hack_status.text = "🔒 RADAR %s: CAÍDO (TAB 03)" % c_name
 			lbl_companion_hack_status.modulate = Color("#ff1744")
 
 func _draw_mia_ecg_wave() -> void:
@@ -3085,9 +3622,9 @@ func _draw_mia_ecg_wave() -> void:
 		return
 	var mid_y = s.y * 0.55
 	var col = Color("#00ff9d")
-	if mia_lives <= 2:
+	if mia_lives <= 1:
 		col = Color("#ff1744")
-	elif mia_lives <= 3:
+	elif mia_lives == 2:
 		col = Color("#ffaa00")
 
 	mia_ecg_graph.draw_line(Vector2(0, mid_y), Vector2(s.x, mid_y), Color(col.r, col.g, col.b, 0.25), 1.0)
@@ -3102,7 +3639,7 @@ func _draw_mia_ecg_wave() -> void:
 			phase += 1.0
 		var y_offset = 0.0
 		if mia_bpm > 0 and mia_lives > 0:
-			var amp_mult = 1.0 + float(mia_max_lives - mia_lives) * 0.12
+			var amp_mult = 1.0 + float(mia_max_lives - mia_lives) * 0.18
 			if phase > 0.40 and phase < 0.47:
 				y_offset = -s.y * 0.40 * amp_mult
 			elif phase >= 0.47 and phase < 0.54:
@@ -3121,12 +3658,7 @@ func _update_mia_vitals_ui() -> void:
 
 	if is_instance_valid(lbl_mia_hearts):
 		lbl_mia_hearts.text = "%s" % hearts_str
-		if mia_lives <= 1:
-			lbl_mia_hearts.modulate = Color("#ff1744")
-		elif mia_lives <= 3:
-			lbl_mia_hearts.modulate = Color("#ffaa00")
-		else:
-			lbl_mia_hearts.modulate = Color("#ff4d94")
+		lbl_mia_hearts.modulate = Color("#ff1744") if mia_lives <= 1 else (Color("#ffaa00") if mia_lives == 2 else Color("#ff4d94"))
 
 	if is_instance_valid(bar_mia_hp):
 		bar_mia_hp.value = mia_hp_percent
@@ -3139,7 +3671,7 @@ func _update_mia_vitals_ui() -> void:
 		elif suffering_heat:
 			lbl_mia_bpm_overlay.text = "🥵 %d BPM!" % mia_bpm
 			lbl_mia_bpm_overlay.modulate = Color("#ff1744") if mia_bpm >= 145 else Color("#ffaa00")
-		elif mia_lives <= 2:
+		elif mia_lives <= 1:
 			lbl_mia_bpm_overlay.text = "PELIGRO (%d)" % mia_bpm
 			lbl_mia_bpm_overlay.modulate = Color("#ff1744")
 		else:
@@ -3147,9 +3679,9 @@ func _update_mia_vitals_ui() -> void:
 			lbl_mia_bpm_overlay.modulate = Color("#00ff9d")
 
 	if is_instance_valid(mia_portrait_border_style):
-		if mia_lives <= 2 or (suffering_heat and mia_bpm >= 145):
+		if mia_lives <= 1 or (suffering_heat and mia_bpm >= 145):
 			mia_portrait_border_style.border_color = Color("#ff1744")
-		elif mia_lives <= 3 or suffering_heat:
+		elif mia_lives == 2 or suffering_heat:
 			mia_portrait_border_style.border_color = Color("#ffaa00")
 		else:
 			mia_portrait_border_style.border_color = Color("#f600ff")
@@ -3171,31 +3703,28 @@ func _draw_tactical_map() -> void:
 		tactical_map.draw_line(Vector2(0, y), Vector2(s.x, y), grid_col, 1.0)
 		y += step
 
-	tactical_map.draw_string(font, Vector2(8, 14), "MAPA DEL BÚNKER (RED DE CÁMARAS)", HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color("#7c8588"))
+	var map_hdr = "ENLACE COMPAÑERA: FIREWALL ACTIVO" if companion_pc_unlocked else "🚨 FIREWALL BLOQUEADO (REPARAR EN TAB 03)"
+	tactical_map.draw_string(font, Vector2(8, 14), map_hdr, HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color("#00ff9d") if companion_pc_unlocked else Color("#ff1744"))
 
 	var mid_y = s.y * 0.50
-	var top_y = s.y * 0.27
-	var bot_y = s.y * 0.73
+	var top_y = s.y * 0.24
+	var bot_y = s.y * 0.76
 
-	var p_core = Vector2(s.x * 0.08, mid_y)
-	var p_1a = Vector2(s.x * 0.23, s.y * 0.23) # Arriba: C1A
-	var p_1 = Vector2(s.x * 0.23, mid_y)       # Medio: C1
-	var p_1b = Vector2(s.x * 0.23, s.y * 0.77) # Abajo: C1B
+	var p_core = Vector2(s.x * 0.07, mid_y)
+	var p_1a = Vector2(s.x * 0.23, s.y * 0.20)
+	var p_1 = Vector2(s.x * 0.23, mid_y)
+	var p_1b = Vector2(s.x * 0.23, s.y * 0.80)
 	var p_2a = Vector2(s.x * 0.45, top_y)
 	var p_2b = Vector2(s.x * 0.45, bot_y)
 	var p_3a = Vector2(s.x * 0.67, top_y)
 	var p_3b = Vector2(s.x * 0.67, bot_y)
 	var p_4 = Vector2(s.x * 0.83, mid_y)
-	var p_you = Vector2(s.x * 0.94, mid_y)
+	var p_you = Vector2(s.x * 0.95, mid_y)
 
 	map_node_positions = {
-		"1A": p_1a,
-		"1": p_1,
-		"1B": p_1b,
-		"2A": p_2a,
-		"2B": p_2b,
-		"3A": p_3a,
-		"3B": p_3b,
+		"1A": p_1a, "1": p_1, "1B": p_1b,
+		"2A": p_2a, "2B": p_2b,
+		"3A": p_3a, "3B": p_3b,
 		"4": p_4
 	}
 
@@ -3207,17 +3736,14 @@ func _draw_tactical_map() -> void:
 		[p_3a, p_4], [p_3b, p_4], [p_4, p_you]
 	]
 	for e in edges:
-		tactical_map.draw_line(e[0], e[1], line_col, 1.4)
+		tactical_map.draw_line(e[0], e[1], line_col, 1.6)
 
 	tactical_map.draw_circle(p_core, 7.0, Color(0.25, 0.04, 0.04, 0.9))
 	tactical_map.draw_arc(p_core, 7.0, 0, TAU, 16, Color("#d9382e"), 1.6)
-	tactical_map.draw_string(font, p_core + Vector2(-15, 18), "CIERRA", HORIZONTAL_ALIGNMENT_LEFT, -1, 8, Color("#d9382e"))
 
 	var you_col = Color("#2bbd7e")
 	tactical_map.draw_circle(p_you, 7.0, Color(0.04, 0.18, 0.10, 0.9))
 	tactical_map.draw_arc(p_you, 7.0, 0, TAU, 16, you_col, 1.6)
-	tactical_map.draw_line(p_you + Vector2(-4, 0), p_you + Vector2(4, 0), you_col, 1.4)
-	tactical_map.draw_line(p_you + Vector2(0, -4), p_you + Vector2(0, 4), you_col, 1.4)
 
 	var monster_node = _get_monster_node_id()
 	for node_id in CAM_NODE_IDS:
@@ -3241,16 +3767,21 @@ func _draw_tactical_map() -> void:
 			ncol = Color("#d9382e")
 			nfill = Color(0.24, 0.06, 0.04, 0.95)
 
-		var box_r = Rect2(npos - Vector2(15, 10), Vector2(30, 20))
+		var box_size := Vector2(46, 30)
+		var box_r := Rect2(npos - box_size * 0.5, box_size)
 		tactical_map.draw_rect(box_r, nfill, true)
-		tactical_map.draw_rect(box_r, ncol, false, 1.8 if is_cam_sel else 1.2)
-		tactical_map.draw_string(font, npos + Vector2(-10, 4), "C" + node_id, HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color("#f0e6d2") if is_cam_sel else Color("#b0b8bc"))
+		tactical_map.draw_rect(box_r, ncol, false, 2.4 if is_cam_sel else 1.5)
 
-		if monster_attack_active and is_monster_here and (monster_spotted_on_cam or not _is_branching_level(monster_security_level)):
-			var m_dot = npos + Vector2(0, -14)
-			tactical_map.draw_circle(m_dot, 4.0, Color("#d9382e"))
+		var cam_txt: String = "C" + node_id
+		var font_size: int = 12
+		var txt_size: Vector2 = font.get_string_size(cam_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
+		var txt_pos := Vector2(
+			npos.x - txt_size.x * 0.5,
+			npos.y + font.get_ascent(font_size) * 0.5 - 1.0
+		)
+		tactical_map.draw_string(font, txt_pos, cam_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color("#f0e6d2") if is_cam_sel else Color("#b0b8bc"))
 
-	var footer_txt = "⚡ %d%%   🌡️ %d°C   🌀 TURBINA %d%%  |  DEFENSAS %d/%d" % [
+	var footer_txt = "⚡ %d%%   🌡️ %d°C   🌀 %d%%  |  DEFENSAS %d/%d" % [
 		int(power_energy),
 		int(bunker_temperature),
 		int(music_box_charge),
@@ -3258,7 +3789,6 @@ func _draw_tactical_map() -> void:
 		TOTAL_DEFENSES_REQUIRED
 	]
 	tactical_map.draw_string(font, Vector2(8, s.y - 6), footer_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color("#7c8588"))
-
 # =========================================================
 # 6. SHADER CRT Y MODALES DE MUERTE Y VICTORIA
 # =========================================================
@@ -3332,68 +3862,32 @@ func _build_death_jumpscare_modal() -> void:
 func _draw_monster_jumpscare_art() -> void:
 	var s = death_art_canvas.size
 	var cx = s.x * 0.5
-	var cy = s.y * 0.22
+	var cy = s.y * 0.20
 	var jitter = Vector2(randf_range(-6.0, 6.0), randf_range(-4.0, 4.0))
-	var left_eye = Vector2(cx - 110, cy) + jitter
-	var right_eye = Vector2(cx + 110, cy) + jitter
-	death_art_canvas.draw_circle(left_eye, 28.0, Color(1.0, 0.0, 0.15, 0.25))
-	death_art_canvas.draw_circle(right_eye, 28.0, Color(1.0, 0.0, 0.15, 0.25))
-	death_art_canvas.draw_circle(left_eye, 11.0, Color("#ff1744"))
-	death_art_canvas.draw_circle(right_eye, 11.0, Color("#ff1744"))
-	death_art_canvas.draw_circle(left_eye, 4.0, Color.WHITE)
-	death_art_canvas.draw_circle(right_eye, 4.0, Color.WHITE)
-	for i in range(5):
-		var offset_x = (i - 2) * 85.0
-		death_art_canvas.draw_line(
-			Vector2(cx + offset_x - 40, 40) + jitter,
-			Vector2(cx + offset_x + 40, s.y - 40) - jitter,
-			Color(1.0, 0.05, 0.2, 0.16),
-			4.0
-		)
 
-func _create_fullscreen_crt_shader() -> void:
-	var canvas_layer = CanvasLayer.new()
-	canvas_layer.layer = 100
-	add_child(canvas_layer)
+	# Las 6 agujas metálicas saliendo de los costados del cráneo
+	for side in [-1.0, 1.0]:
+		for i in range(3):
+			var p_start = Vector2(cx + side * 95.0, cy - 10.0 + i * 14.0) + jitter
+			var p_end = Vector2(cx + side * 280.0, cy - 38.0 + i * 26.0) + jitter * 1.4
+			death_art_canvas.draw_line(p_start, p_end, Color(0.55, 0.48, 0.44, 0.55), 3.0)
 
-	var crt_rect = ColorRect.new()
-	crt_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	crt_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# Silueta de la mandíbula desencajada
+	death_art_canvas.draw_rect(Rect2(cx - 75.0 + jitter.x, cy + 25.0 + jitter.y, 150.0, 140.0), Color(0.02, 0.01, 0.01, 0.85), true)
+	death_art_canvas.draw_rect(Rect2(cx - 75.0 + jitter.x, cy + 25.0 + jitter.y, 150.0, 140.0), Color(0.35, 0.12, 0.12, 0.45), false, 3.0)
 
-	var shader = Shader.new()
-	shader.code = """
-shader_type canvas_item;
-uniform sampler2D SCREEN_TEXTURE : hint_screen_texture, filter_linear_mipmap;
-uniform float intensity : hint_range(0.0, 1.0) = 0.65;
+	# Ojos blancos brillantes hundidos en la oscuridad
+	var left_eye = Vector2(cx - 58, cy) + jitter
+	var right_eye = Vector2(cx + 58, cy) + jitter
+	death_art_canvas.draw_circle(left_eye, 24.0, Color(1.0, 1.0, 1.0, 0.18))
+	death_art_canvas.draw_circle(right_eye, 24.0, Color(1.0, 1.0, 1.0, 0.18))
+	death_art_canvas.draw_circle(left_eye, 8.0, Color.WHITE)
+	death_art_canvas.draw_circle(right_eye, 8.0, Color.WHITE)
 
-float hash(vec2 p) {
-	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-}
-
-void fragment() {
-	vec2 uv = SCREEN_UV;
-	vec3 col = texture(SCREEN_TEXTURE, uv).rgb;
-
-	float luma = dot(col, vec3(0.299, 0.587, 0.114));
-	col = mix(col, vec3(luma * 0.95, luma * 1.02, luma * 0.96), 0.28);
-
-	float scanline = sin(uv.y * 850.0) * 0.025;
-	float grain = (hash(uv * 420.0 + fract(TIME * 0.5)) - 0.5) * 0.045;
-	col -= scanline;
-	col += grain;
-
-	float vig = uv.x * uv.y * (1.0 - uv.x) * (1.0 - uv.y);
-	float vig_factor = clamp(pow(18.0 * vig, 0.22), 0.0, 1.0);
-	col *= mix(1.0, vig_factor, 0.75);
-
-	COLOR = vec4(col, 1.0);
-}
-"""
-	var mat = ShaderMaterial.new()
-	mat.shader = shader
-	mat.set_shader_parameter("intensity", crt_intensity)
-	crt_rect.material = mat
-	canvas_layer.add_child(crt_rect)
+	# El Chip cuadrado brillando en el centro del pecho
+	var chip_pos = Vector2(cx - 24.0, s.y * 0.78) - jitter * 0.6
+	death_art_canvas.draw_rect(Rect2(chip_pos - Vector2(10, 10), Vector2(68, 68)), Color(0.25, 0.22, 0.18, 0.7), false, 3.0)
+	death_art_canvas.draw_rect(Rect2(chip_pos, Vector2(48, 48)), Color(1.0, 0.88, 0.45, 0.85), true)
 
 func _load_board_texture(res_path: String) -> Texture2D:
 	var abs_path = ProjectSettings.globalize_path(res_path)
@@ -3475,16 +3969,16 @@ void fragment() {
 	return overlay
 
 # =========================================================
-# 7. LÓGICA DEL MONSTRUO, PUERTAS (0-10s RANDOM) Y RESOLUCIÓN
+# 7. LÓGICA DEL MONSTRUO, PUERTA ÚNICA Y GOLPE ACÚSTICO (THUD)
 # =========================================================
-func _on_monster_completed_hack(reason_msg: String) -> void:
+func _on_monster_completed_hack(_reason_msg: String) -> void:
 	if not game_active or not is_instance_valid(current_mission):
 		return
 	var breached_node = _get_monster_node_id()
 	if door_node_states.get(breached_node, "OPEN") == "LOCKED" and power_energy > 0.0:
 		monster_hack_progress = 85.0
 		if door_hold_target_time < 0.0:
-			door_hold_target_time = randf_range(1.5, 8.0)
+			door_hold_target_time = randf_range(2.5, 6.0)
 			door_hold_timer = 0.0
 		return
 
@@ -3494,12 +3988,9 @@ func _on_monster_completed_hack(reason_msg: String) -> void:
 	if door_node_states.get(next_node_id, "OPEN") == "LOCKED" and power_energy > 0.0:
 		monster_security_level = next_lvl
 		monster_branch = candidate_branch
-		monster_spotted_on_cam = true
-		monster_hack_progress = 50.0
-		door_hold_target_time = randf_range(1.5, 8.0)
+		monster_hack_progress = 55.0
+		door_hold_target_time = randf_range(2.5, 6.0)
 		door_hold_timer = 0.0
-		_log_chat("PUERTA_ANTICIPADA", "🚪 ¡Subject-Zero intentó avanzar a [C%s], pero ya tenías esa puerta CERRADA! Quedó retenido frente a [C%s] sin hacerte daño." % [next_node_id, next_node_id], "#00ff9d")
-		_select_camera(next_node_id)
 		_update_terminal_lock_state()
 		_update_hud()
 		return
@@ -3508,13 +3999,10 @@ func _on_monster_completed_hack(reason_msg: String) -> void:
 	door_hold_timer = 0.0
 	door_hold_target_time = -1.0
 
+	# Si jugás con Naomi y tiene su escudo activo, te perdona una brecha completa
 	if current_mission.companion_perk == "forgive_hack" and naomi_shield_charges > 0:
 		naomi_shield_charges -= 1
 		bpm = max(85, bpm - 10)
-		_log_chat("NAOMI_SAVED_YOU", "🛡️ [NAOMI BLOQUEÓ LA BRECHA EN CAM %s!]: «%s ¡Intercepté el ataque con mi escudo Aegis! (0/1 Escudo restante)»" % [
-			breached_node,
-			reason_msg
-		], "#00ff9d")
 		_update_companion_perk_ui()
 		_update_hud()
 		_generate_breach_matrix()
@@ -3524,11 +4012,11 @@ func _on_monster_completed_hack(reason_msg: String) -> void:
 	monster_last_node_id = breached_node
 	monster_security_level += 1
 	monster_branch = candidate_branch
-	monster_spotted_on_cam = (monster_security_level >= TOTAL_SECURITY_LEVELS) or (selected_cam_id == _get_monster_node_id())
-	bpm = min(max_bpm, bpm + 14)
+	monster_spotted_on_cam = (selected_cam_id == _get_monster_node_id() and camera_disabled_timer <= 0.0 and not light_hacked_by_monster)
+	bpm = min(max_bpm, bpm + 16)
 
 	mia_lives = max(0, mia_lives - 1)
-	mia_bpm = min(195, mia_bpm + 24)
+	mia_bpm = min(198, mia_bpm + 28)
 	mia_damage_flash = 1.0
 	_update_mia_vitals_ui()
 
@@ -3536,14 +4024,7 @@ func _on_monster_completed_hack(reason_msg: String) -> void:
 		_trigger_level_5_fatal_breach()
 		return
 
-	var next_stage_hint = ("¡Revisá las cámaras [%s] para ver qué pasillo tomó!" % _stage_doors_text(monster_security_level)) if _is_branching_level(monster_security_level) else ("¡Llegó a la Puerta Final 4!")
-	_log_chat("BRECHA", "☣️ [PUERTA C%s VULNERADA!]: %s 💔 Tu compañera perdió 1 Corazón (%d/%d)! %s" % [
-		breached_node,
-		reason_msg,
-		mia_lives,
-		mia_max_lives,
-		next_stage_hint
-	], "#ff1744")
+	companion_pc_unlocked = false # <-- Agregá esta línea antes de _generate_breach_matrix()
 	_generate_breach_matrix()
 	_update_turbine_ui()
 	_refresh_lure_tab_ui()
@@ -3555,6 +4036,7 @@ func _on_monster_completed_hack(reason_msg: String) -> void:
 func _trigger_level_5_fatal_breach() -> void:
 	game_active = false
 	game_timer.stop()
+	is_holding_turbine_btn = false
 	bpm = 0
 	mia_lives = 0
 	mia_hp_percent = 0
@@ -3565,7 +4047,10 @@ func _trigger_level_5_fatal_breach() -> void:
 	var guard_name = current_mission.security_guard_name.to_upper()
 	var m_name = current_mission.monster_name
 
-	_log_chat("FATAL_BREACH", "💀 %s VULNERÓ LA PUERTA FINAL 4! %s FUE ASESINADA Y EL MONSTRUO ACABÓ CON VOS!" % [m_name, comp_name], "#ff1744")
+	if is_instance_valid(sfx_scare_player):
+		sfx_scare_player.pitch_scale = 0.72
+		sfx_scare_player.play()
+
 	status_overlay.text = "● BRECHA CRÍTICA // %s: 0%% HP // OPERADOR: CAÍDO" % comp_name
 	status_overlay.modulate = Color("#ff1744")
 	btn_continue_vn.visible = true
@@ -3586,33 +4071,27 @@ func _on_second_tick() -> void:
 	time_left -= 1
 	bpm = clamp(bpm + randi_range(1, 3), 65, max_bpm)
 	if mia_lives > 0:
-		var base_mia_bpm = 90 + (mia_max_lives - mia_lives) * 20
+		var base_mia_bpm = 90 + (mia_max_lives - mia_lives) * 24
 		if temp_hacked_by_monster:
-			base_mia_bpm += 42
+			base_mia_bpm += 38
 		if bunker_temperature > NORMAL_TEMP:
 			base_mia_bpm += int((bunker_temperature - NORMAL_TEMP) * 1.15)
 		if music_box_charge < 45.0:
 			base_mia_bpm += 22
 		mia_bpm = clampi(base_mia_bpm + randi_range(-3, 5), 75, 198)
 
-	if (temp_hacked_by_monster or bunker_temperature >= 48.0 or music_box_charge < 40.0) and time_left % 8 == 0:
-		var comp_n = current_mission.agent_name.to_upper() if is_instance_valid(current_mission) else "COMPAÑERA"
-		_log_chat(comp_n, "«¡Hace demasiado calor en la sala (%d°C) y mi corazón va a %d BPM! ¡Impulsá la Turbina en [Tab 01] al >85%% para purgar la refrigeración!»" % [int(bunker_temperature), mia_bpm], "#ff4d94")
-
 	_update_hud()
-
-	if bpm >= int(max_bpm * 0.85) and time_left % 9 == 0:
-		_log_chat(current_mission.agent_name.to_upper(), current_mission.agent_panic_line, "#ff3366")
 
 	if bpm >= max_bpm:
 		bpm = int(max_bpm * 0.78)
 		var cur_m_node = _get_monster_node_id()
 		if monster_attack_active and music_box_charge < 40.0 and door_node_states.get(cur_m_node, "OPEN") != "LOCKED":
-			monster_hack_progress = min(100.0, monster_hack_progress + 12.0)
+			monster_hack_progress = min(100.0, monster_hack_progress + 10.0)
 	elif time_left <= 0:
-		_end_game(true, "mission", "¡06:00 AM ALCANZADAS! ¡Sobreviviste la noche junto a %s y %s!" % [current_mission.agent_name, current_mission.security_guard_name])
+		_end_game(true, "mission", "¡06:00 AM ALCANZADAS! ¡Sobreviviste la noche!")
 
-func _on_seal_door_choice_pressed(_branch_choice: String = "A") -> void:
+# --- REGLA DE 1 SOLA COMPUERTA MAGNÉTICA CERRADA A LA VEZ ---
+func _on_seal_door_choice_pressed() -> void:
 	if not game_active:
 		return
 	var chosen_node_id: String = selected_cam_id
@@ -3623,35 +4102,43 @@ func _on_seal_door_choice_pressed(_branch_choice: String = "A") -> void:
 		if chosen_node_id == _get_monster_node_id():
 			door_hold_timer = 0.0
 			door_hold_target_time = -1.0
-		_log_chat("PUERTAS", "🔓 Abriste la Puerta [C%s] para ahorrar Energía eléctrica." % chosen_node_id, "#88ccee")
 		_select_camera(chosen_node_id)
 		_update_terminal_lock_state()
 		_refresh_lure_tab_ui()
 		return
 
-	if power_energy <= 2.0:
-		_log_chat("SISTEMA", "⚠️ ¡No hay Energía suficiente para cerrar la Puerta [C%s]!" % chosen_node_id, "#ff1744")
+	if power_energy <= 3.0:
 		return
 
-	power_energy = max(0.0, power_energy - 4.0)
+	# Solo puede haber 1 compuerta magnética cerrada al mismo tiempo: abre las demás automáticamente
+	for k in door_node_states.keys():
+		if door_node_states[k] == "LOCKED":
+			door_node_states[k] = "OPEN"
+
+	power_energy = max(0.0, power_energy - 3.5)
 	door_node_states[chosen_node_id] = "LOCKED"
 	_select_camera(chosen_node_id)
 
 	var actual_monster_node = _get_monster_node_id()
 	if monster_attack_active and chosen_node_id == actual_monster_node:
-		door_hold_target_time = randf_range(1.5, 10.0)
+		door_hold_target_time = randf_range(2.5, 6.5)
 		door_hold_timer = 0.0
 		monster_is_moving = false
-		_log_chat("PUERTAS", "🚪 ¡Cerraste la Puerta [C%s] frente a Subject-Zero! Mantenela cerrada con Energía (se irá entre 1.5 y 10 segundos)!" % chosen_node_id, "#00ff9d")
 	else:
-		_log_chat("PUERTAS", "🚪 Puerta [C%s] cerrada preventivamente (consumiendo Energía)." % chosen_node_id, "#ffcc00")
+		door_hold_timer = 0.0
+		door_hold_target_time = -1.0
 
 	_update_energy_and_temp_hud()
 	_refresh_lure_tab_ui()
 	_update_terminal_lock_state()
 	_update_hud()
 
-func _on_monster_left_after_closed_door(repelled_node_id: String, waited_seconds: float) -> void:
+func _on_monster_left_after_closed_door(repelled_node_id: String, _waited_seconds: float) -> void:
+	# ¡GOLPE ACÚSTICO METÁLICO (THUD)! Le avisa al jugador por oído que el monstruo chocó y se fue
+	if is_instance_valid(sfx_thud_player):
+		sfx_thud_player.pitch_scale = randf_range(0.88, 1.06)
+		sfx_thud_player.play()
+
 	gates_closed_by_guard += 1
 	monster_hack_progress = 0.0
 	door_hold_timer = 0.0
@@ -3659,6 +4146,10 @@ func _on_monster_left_after_closed_door(repelled_node_id: String, waited_seconds
 	affinity = min(100, affinity + 12)
 	bpm = max(70, bpm - 12)
 	mia_prediction_ready = (current_mission.companion_perk == "prediction")
+
+	# Al rebotar contra la puerta cerrada, retrocede a los primeros pasillos
+	monster_security_level = 1 if randf() < 0.70 else max(1, monster_security_level - 1)
+	monster_branch = _random_branch_for_level(monster_security_level)
 
 	if gates_closed_by_guard >= TOTAL_DEFENSES_REQUIRED:
 		_update_hud()
@@ -3670,17 +4161,12 @@ func _on_monster_left_after_closed_door(repelled_node_id: String, waited_seconds
 	monster_attack_active = false
 	monster_is_moving = false
 	monster_spotted_on_cam = false
-	monster_hack_progress = 0.0
 	monster_last_node_id = repelled_node_id
 	monster_advance_on_next_wave = false
-	monster_cooldown_timer = randf_range(5.0, 15.5)
+	monster_cooldown_timer = randf_range(4.5, 11.0)
 
-	_log_chat(current_mission.agent_name.to_upper(), "🚪 «¡Se fue! Después de %0.1f segundos con la Puerta [C%s] cerrada, Subject-Zero desistió y desapareció (%d/%d defensas). ¡Ya podés abrir la puerta para no gastar Energía!»" % [
-		waited_seconds,
-		repelled_node_id,
-		gates_closed_by_guard,
-		TOTAL_DEFENSES_REQUIRED
-	], "#00ff9d")
+	status_overlay.text = "🔊 ¡GOLPE EN COMPUERTA [C%s]! SUBJECT-ZERO REBOTÓ — ¡ABRÍ LA PUERTA!" % repelled_node_id
+	status_overlay.modulate = Color("#00ff9d")
 
 	_refresh_lure_tab_ui()
 	_select_camera(selected_cam_id)
@@ -3689,13 +4175,12 @@ func _on_monster_left_after_closed_door(repelled_node_id: String, waited_seconds
 	_update_hud()
 	_update_3d_previz(0.0)
 
-
 func _end_game(victory: bool, outcome_type: String, reason: String) -> void:
 	game_active = false
 	game_timer.stop()
+	is_holding_turbine_btn = false
 	last_outcome_type = outcome_type
 	var color = "#2bbd7e" if victory else "#ff3366"
-	_log_chat("RESULTADO", ("🏆 ¡GANASTE! " + reason) if victory else reason, color)
 	status_overlay.text = "● CONTENCIÓN: " + ("🏆 ¡GANASTE! NOCHE COMPLETADA" if victory else "VULNERADO")
 	status_overlay.modulate = Color(color)
 	btn_continue_vn.visible = true
@@ -3703,7 +4188,7 @@ func _end_game(victory: bool, outcome_type: String, reason: String) -> void:
 	if victory and is_instance_valid(victory_modal):
 		var comp_name = current_mission.agent_name.to_upper() if is_instance_valid(current_mission) else "COMPAÑERA"
 		lbl_victory_title.text = "🏆 ¡GANASTE! — 06:00 AM // NOCHE SUPERADA"
-		lbl_victory_details.text = "[center][color=#aaddff][b]%s[/b][/color]\n\n[color=#2bbd7e][b]• Estado de %s:[/b] A SALVO (%d/%d ♥)  |  [b]Vínculo:[/b] %d%%\n[b]• Energía Restante:[/b] %d%%  |  [b]Temperatura Final:[/b] %d°C[/color]\n\n[color=#d8dfdc]¡Lograste contener a Subject-Zero y sobrevivir el turno nocturno de prueba![/color][/center]" % [
+		lbl_victory_details.text = "[center][color=#aaddff][b]%s[/b][/color]\n\n[color=#2bbd7e][b]• Estado de %s:[/b] A SALVO (%d/%d ♥)  |  [b]Vínculo:[/b] %d%%\n[b]• Energía Restante:[/b] %d%%  |  [b]Temperatura Final:[/b] %d°C[/color]\n\n[color=#d8dfdc]¡Lograste contener a Subject-Zero y sobrevivir a la Anomalía Fantasma![/color][/center]" % [
 			reason,
 			comp_name,
 			mia_lives,
@@ -3794,11 +4279,11 @@ func _update_hud() -> void:
 	lbl_timer.text = "🕒 %02d:00 AM (%02ds)" % [display_hr, time_left]
 	bar_trace.value = time_left
 	bar_affinity.value = affinity
-	lbl_affinity.text = "♥ VÍNCULO (%s): %d%%  |  VIDAS: %d/5 ♥  |  ETAPA: %d/4" % [
+	lbl_affinity.text = "♥ VÍNCULO (%s): %d%%  |  VIDAS: %d/%d ♥" % [
 		current_mission.agent_name.to_upper(),
 		affinity,
 		mia_lives,
-		clampi(monster_security_level, 1, TOTAL_SECURITY_LEVELS)
+		mia_max_lives
 	]
 	_update_mia_vitals_ui()
 	_update_energy_and_temp_hud()
@@ -3810,12 +4295,11 @@ func _populate_mission_selector() -> void:
 		var perk_short = "Predicción" if m.companion_perk == "prediction" else "Escudo 1-Brecha"
 		mission_selector.add_item("%s (%s)" % [m.agent_name, perk_short], i)
 
-func _create_default_template(p_name: String, p_code: String, p_color: Color, p_pos: Vector2) -> MissionData:
+func _create_default_template(p_name: String, p_code: String, p_color: Color) -> MissionData:
 	var m = MissionData.new()
 	m.agent_name = p_name
 	m.agent_codename = p_code
 	m.agent_color = p_color
-	m.map_agent_pos = p_pos
 	if p_name.to_lower() == "naomi":
 		m.companion_perk = "forgive_hack"
 		m.security_guard_name = "Mia"
@@ -3825,9 +4309,6 @@ func _create_default_template(p_name: String, p_code: String, p_color: Color, p_
 		m.security_guard_name = "Naomi"
 		m.security_guard_codename = "AEGIS-02"
 	return m
-
-func _log_chat(sender: String, msg: String, hex_color: String) -> void:
-	rtl_chat.append_text("[color=#446688][%02ds][/color] [color=%s][b][%s]:[/b][/color] %s\n\n" % [time_left, hex_color, sender, msg])
 
 # =========================================================
 # 8. HELPERS DE ESTILO VISUAL (INDUSTRIAL GRUNGE BUNKER UI KIT)
@@ -3972,7 +4453,6 @@ func _draw_3d_monitor_diorama() -> void:
 		return
 	var font: Font = ThemeDB.fallback_font
 
-	# Coordenadas de la pantalla física (con leve perspectiva trapezoidal 3D en el chasis exterior)
 	var scr_tl := Vector2(70.0, 50.0)
 	var scr_tr := Vector2(s.x - 84.0, 50.0)
 	var scr_bl := Vector2(70.0, s.y - 64.0)
@@ -3983,17 +4463,14 @@ func _draw_3d_monitor_diorama() -> void:
 	var out_bl := Vector2(22.0, s.y - 34.0)
 	var out_br := Vector2(s.x - 16.0, s.y - 26.0)
 
-	# 1. PARED TRASERA DEL BÚNKER Y TUBERÍAS SUPERIORES
 	for pipe_x in [s.x * 0.18, s.x * 0.24, s.x * 0.52, s.x * 0.78, s.x * 0.88]:
 		monitor_3d_diorama.draw_rect(Rect2(pipe_x, 0.0, 18.0, 32.0), Color("#121518"), true)
 		monitor_3d_diorama.draw_line(Vector2(pipe_x + 4.0, 0.0), Vector2(pipe_x + 4.0, 32.0), Color(1, 1, 1, 0.06), 2.0)
 
-	# Logo circular tipo SCP en la pared superior derecha (como en la imagen)
 	var wall_logo_c := Vector2(s.x * 0.76, 18.0)
 	monitor_3d_diorama.draw_arc(wall_logo_c, 22.0, 0.0, TAU, 28, Color(0.35, 0.38, 0.40, 0.22), 2.5)
 	monitor_3d_diorama.draw_arc(wall_logo_c, 12.0, 0.0, TAU, 20, Color(0.35, 0.38, 0.40, 0.22), 2.0)
 
-	# 2. SIRENA ROJA DE ALARMA EN LA ESQUINA SUPERIOR IZQUIERDA (CON RESPLANDOR VOLUMÉTRICO)
 	var alarm_pulse: float = 0.65 + 0.35 * sin(pulse_phase * 1.8)
 	if monster_attack_active or _count_active_errors() > 0 or bunker_temperature >= 60.0:
 		alarm_pulse = 0.85 + 0.15 * sin(pulse_phase * 4.5)
@@ -4003,12 +4480,10 @@ func _draw_3d_monitor_diorama() -> void:
 		monitor_3d_diorama.draw_circle(lamp_pos, rad, Color(0.95, 0.12, 0.08, 0.045 * alarm_pulse))
 	monitor_3d_diorama.draw_circle(lamp_pos, 14.0, Color(1.0, 0.22, 0.15, 0.9 * alarm_pulse))
 	monitor_3d_diorama.draw_circle(lamp_pos, 7.0, Color(1.0, 0.75, 0.65, 0.95 * alarm_pulse))
-	# Jaula metálica de la sirena
 	monitor_3d_diorama.draw_arc(lamp_pos, 15.0, 0.0, TAU, 16, Color("#2a1210"), 2.0)
 	monitor_3d_diorama.draw_line(lamp_pos + Vector2(-15, 0), lamp_pos + Vector2(15, 0), Color("#2a1210"), 1.5)
 	monitor_3d_diorama.draw_line(lamp_pos + Vector2(0, -15), lamp_pos + Vector2(0, 15), Color("#2a1210"), 1.5)
 
-	# 3. ESCRITORIO METÁLICO INFERIOR EN PERSPECTIVA 3D
 	var desk_poly := PackedVector2Array([
 		Vector2(0.0, s.y - 42.0),
 		Vector2(s.x, s.y - 34.0),
@@ -4018,52 +4493,378 @@ func _draw_3d_monitor_diorama() -> void:
 	monitor_3d_diorama.draw_colored_polygon(desk_poly, Color("#0a0c0e"))
 	monitor_3d_diorama.draw_line(Vector2(0.0, s.y - 42.0), Vector2(s.x, s.y - 34.0), Color("#22282a"), 2.0)
 
-	# Rejilla de ventilación del escritorio y reflejo naranja/rojo de los botones sobre la mesa
 	for gx in range(int(s.x * 0.18), int(s.x * 0.52), 16):
 		monitor_3d_diorama.draw_line(Vector2(gx, s.y - 28.0), Vector2(gx - 18.0, s.y - 4.0), Color("#15191c"), 2.0)
 	monitor_3d_diorama.draw_circle(Vector2(s.x * 0.25, s.y - 12.0), 42.0, Color(0.95, 0.22, 0.12, 0.08 * alarm_pulse))
 
-	# 4. CARCASA EXTERIOR 3D DEL MONITOR (BISEL TRAPEZOIDAL + PANEL "BÚNKER B7" A LA DERECHA)
 	var chassis_poly := PackedVector2Array([out_tl, out_tr, out_br, out_bl])
 	monitor_3d_diorama.draw_colored_polygon(chassis_poly, Color("#121517"))
 	monitor_3d_diorama.draw_polyline(PackedVector2Array([out_tl, out_tr, out_br, out_bl, out_tl]), Color("#2c3336"), 2.5)
 
-	# Bisel interno en perspectiva conectando el chasis exterior con la pantalla hundida
 	monitor_3d_diorama.draw_colored_polygon(PackedVector2Array([out_tl, out_tr, scr_tr, scr_tl]), Color("#181c1f"))
 	monitor_3d_diorama.draw_colored_polygon(PackedVector2Array([scr_bl, scr_br, out_br, out_bl]), Color("#0c0e10"))
 	monitor_3d_diorama.draw_colored_polygon(PackedVector2Array([out_tl, scr_tl, scr_bl, out_bl]), Color("#14181b"))
 	monitor_3d_diorama.draw_colored_polygon(PackedVector2Array([scr_tr, out_tr, out_br, scr_br]), Color("#101315"))
 
-	# Líneas de unión en las 4 esquinas del bisel 3D
 	monitor_3d_diorama.draw_line(out_tl, scr_tl, Color("#2a3033"), 2.0)
 	monitor_3d_diorama.draw_line(out_tr, scr_tr, Color("#2a3033"), 2.0)
 	monitor_3d_diorama.draw_line(out_bl, scr_bl, Color("#2a3033"), 2.0)
 	monitor_3d_diorama.draw_line(out_br, scr_br, Color("#2a3033"), 2.0)
 
-	# Tira LED vertical roja y rótulo "BÚNKER B7" en el marco derecho del monitor (igual a la foto)
 	var right_frame_x: float = s.x - 76.0
 	monitor_3d_diorama.draw_rect(Rect2(right_frame_x + 12.0, s.y * 0.24, 5.0, s.y * 0.18), Color(0.95, 0.18, 0.12, 0.85 * alarm_pulse), true)
 	monitor_3d_diorama.draw_circle(Vector2(right_frame_x + 14.0, s.y * 0.20), 4.0, Color("#d9382e"))
 	monitor_3d_diorama.draw_string(font, Vector2(right_frame_x - 2.0, s.y * 0.50), "BÚNKER", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("#5c6466"))
 	monitor_3d_diorama.draw_string(font, Vector2(right_frame_x - 2.0, s.y * 0.55), "B7", HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Color("#6e777a"))
 
-	# Tornillos/remaches industriales en el marco del monitor
 	for rv in [Vector2(52, 36), Vector2(52, s.y - 48), Vector2(s.x - 42, 42), Vector2(s.x - 42, s.y - 44)]:
 		monitor_3d_diorama.draw_circle(rv, 3.5, Color("#090b0c"))
 		monitor_3d_diorama.draw_arc(rv, 3.5, 0.0, TAU, 10, Color("#2e3538"), 1.2)
 
-	# 5. TAZA DE CAFÉ CON EL LOGO EN LA ESQUINA INFERIOR IZQUIERDA (DELANTE DEL MONITOR)
 	var mug_pos := Vector2(18.0, s.y - 118.0)
 	var mug_size := Vector2(78.0, 96.0)
-	# Asa de la taza
 	monitor_3d_diorama.draw_arc(mug_pos + Vector2(mug_size.x + 2.0, mug_size.y * 0.52), 20.0, -PI * 0.45, PI * 0.45, 16, Color("#2c2a29"), 7.0)
-	# Cuerpo de la taza sucia
 	monitor_3d_diorama.draw_rect(Rect2(mug_pos, mug_size), Color("#252322"), true)
 	monitor_3d_diorama.draw_rect(Rect2(mug_pos + Vector2(6, 4), Vector2(14, mug_size.y - 8)), Color(1, 1, 1, 0.05), true)
 	monitor_3d_diorama.draw_rect(Rect2(mug_pos, mug_size), Color("#3d3a38"), false, 2.0)
-	# Boca elíptica superior de la taza
 	monitor_3d_diorama.draw_circle(mug_pos + Vector2(mug_size.x * 0.5, 4.0), 10.0, Color("#121010"))
-	# Símbolo circular en la taza
 	var mug_logo := mug_pos + Vector2(mug_size.x * 0.48, mug_size.y * 0.56)
 	monitor_3d_diorama.draw_arc(mug_logo, 16.0, 0.0, TAU, 20, Color("#121110"), 2.0)
 	monitor_3d_diorama.draw_arc(mug_logo, 8.0, 0.0, TAU, 16, Color("#121110"), 1.6)
+
+func _draw_companion_matrix_stream() -> void:
+	if not is_instance_valid(matrix_rain_canvas):
+		return
+	var s: Vector2 = matrix_rain_canvas.size
+	if s.x < 20.0 or s.y < 20.0:
+		return
+
+	var font: Font = ThemeDB.fallback_font
+	var matrix_pending: bool = (target_sequence.size() > 0 and entered_sequence.size() < target_sequence.size())
+	var is_hacked: bool = (not companion_pc_unlocked) or temp_hacked_by_monster or matrix_pending
+	var main_col: Color = Color("#ff1744") if is_hacked else Color("#00ff9d")
+	var head_col: Color = Color("#ffcdd2") if is_hacked else Color("#d6ffef")
+	var t_now: float = float(Time.get_ticks_msec()) * 0.001
+
+	if is_instance_valid(matrix_stream_style):
+		if is_hacked:
+			var pulse_err: float = 0.5 + 0.5 * sin(t_now * 9.0)
+			matrix_stream_style.border_color = Color("#ff1744").lerp(Color("#ffaa00"), pulse_err)
+			matrix_stream_style.bg_color = Color(0.09 + 0.05 * pulse_err, 0.01, 0.02, 0.96)
+		else:
+			matrix_stream_style.border_color = Color("#00ff9d")
+			matrix_stream_style.bg_color = Color(0.02, 0.05, 0.04, 0.96)
+
+	var glyphs_ok: String = "0101101001¥§∆Ω∑¶#%&@$0110100101ΞΨΦ01"
+	var glyphs_err: String = "01X!#¥§ERR_FAULT_00110101☠⚠0101#?!×0"
+	var charset: String = glyphs_err if is_hacked else glyphs_ok
+
+	var col_w: float = 16.0
+	var row_h: float = 12.0
+	var cols: int = int(s.x / col_w) + 1
+	var rows: int = int(s.y / row_h) + 2
+
+	for c in range(cols):
+		var col_seed: float = float(c * 37 + 13)
+		var speed: float = (6.0 if is_hacked else 3.2) + fmod(col_seed * 0.31, 2.6)
+		var cycle_len: float = float(max(6, rows + 4))
+		var head_pos: float = fmod(t_now * speed + col_seed * 0.7, cycle_len)
+
+		for r in range(rows):
+			var dist: float = fposmod(head_pos - float(r), cycle_len)
+			if dist <= 8.5:
+				var alpha: float = clampf(1.0 - (dist / 8.5), 0.15, 0.95)
+				var char_idx: int = int(abs(sin(col_seed + float(r) * 1.9 + floor(t_now * (14.0 if is_hacked else 6.0))) * 1000.0)) % charset.length()
+				var ch: String = charset.substr(char_idx, 1)
+				var pos := Vector2(4.0 + float(c) * col_w, 24.0 + float(r) * row_h)
+				if pos.y <= s.y + 4.0:
+					var draw_c: Color = head_col if dist < 0.9 else Color(main_col.r, main_col.g, main_col.b, alpha * 0.82)
+					matrix_rain_canvas.draw_string(font, pos, ch, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, draw_c)
+
+	matrix_rain_canvas.draw_rect(Rect2(0.0, 0.0, s.x, 16.0), Color(0.01, 0.02, 0.03, 0.90), true)
+	var comp_name: String = current_mission.agent_name.to_upper() if is_instance_valid(current_mission) else "COMPAÑERA"
+	var header_txt: String = ""
+	if is_hacked:
+		header_txt = "🚨 [ERR_0x9F // FIREWALL DE %s CAÍDO — CLICK PARA DESBLOQUEAR EN TAB 03]" % comp_name
+	else:
+		header_txt = "🟢 [FIREWALL_LINK // %s CONTENIENDO AVANCE // ENCRIPTACIÓN ESTABLE...]" % comp_name
+	matrix_rain_canvas.draw_string(font, Vector2(6.0, 12.0), header_txt, HORIZONTAL_ALIGNMENT_LEFT, s.x - 12.0, 10, head_col if is_hacked else main_col)
+	
+	# =========================================================
+# LÓGICA DE VIDEO DE NAOMI / COMPAÑERA EN EL PANEL IZQUIERDO
+# =========================================================
+# =========================================================
+# LÓGICA DE LOS 3 VIDEOS DE NAOMI / COMPAÑERA (PANEL IZQUIERDO)
+# =========================================================
+func _setup_companion_left_video(data: MissionData) -> void:
+	companion_idle_1_stream = null
+	companion_idle_2_stream = null
+	companion_hacked_stream = null
+	companion_idle_wait_timer = 0.0
+	companion_static_timer = 0.0
+	companion_was_hacked_state = false
+	companion_next_is_look_around = false
+
+	if naomi_idle_1_video_path != "" and ResourceLoader.exists(naomi_idle_1_video_path):
+		companion_idle_1_stream = load(naomi_idle_1_video_path)
+	elif data.seedance_video != "" and ResourceLoader.exists(data.seedance_video):
+		companion_idle_1_stream = load(data.seedance_video)
+
+	if naomi_idle_2_video_path != "" and ResourceLoader.exists(naomi_idle_2_video_path):
+		companion_idle_2_stream = load(naomi_idle_2_video_path)
+
+	if naomi_hacked_video_path != "" and ResourceLoader.exists(naomi_hacked_video_path):
+		companion_hacked_stream = load(naomi_hacked_video_path)
+
+	if is_instance_valid(companion_static_burst_rect):
+		companion_static_burst_rect.visible = false
+
+	if is_instance_valid(companion_video_player):
+		if companion_idle_1_stream != null:
+			var is_naomi: bool = (data.agent_name.to_lower() == "naomi")
+			companion_video_player.material = _create_portrait_crt_material(
+				Color(0.86, 1.0, 0.94, 1.0) if is_naomi else Color(0.98, 0.88, 1.0, 1.0)
+			)
+			companion_video_player.visible = true
+			_play_next_normal_companion_clip()
+		else:
+			companion_video_player.stop()
+			companion_video_player.visible = false
+
+func _play_next_normal_companion_clip() -> void:
+	if not is_instance_valid(companion_video_player):
+		return
+	var chosen_stream: VideoStream = companion_idle_1_stream
+	if companion_next_is_look_around and companion_idle_2_stream != null:
+		chosen_stream = companion_idle_2_stream
+	companion_next_is_look_around = not companion_next_is_look_around
+
+	if chosen_stream != null:
+		companion_video_player.stop()
+		companion_video_player.stream = chosen_stream
+		companion_video_player.visible = true
+		companion_video_player.paused = false
+		companion_video_player.play()
+
+func _update_companion_left_video(delta: float) -> void:
+	if not is_instance_valid(companion_video_player) or companion_idle_1_stream == null:
+		return
+
+	var matrix_pending: bool = (target_sequence.size() > 0 and entered_sequence.size() < target_sequence.size())
+	var is_hacked_now: bool = (not companion_pc_unlocked) or temp_hacked_by_monster or matrix_pending
+
+	# 1. ¿Cambió entre Normal <-> Hackeado? ¡Disparar estática y cambiar al video correspondiente!
+	if is_hacked_now != companion_was_hacked_state:
+		companion_was_hacked_state = is_hacked_now
+		companion_static_timer = 0.35
+		companion_idle_wait_timer = 0.0
+
+		if is_instance_valid(companion_static_burst_rect):
+			companion_static_burst_rect.visible = true
+
+		if is_hacked_now:
+			# HACKEARON LA TERMINAL -> Pasa al Video 3 (preocupada mirando abajo) en loop
+			var hack_str: VideoStream = companion_hacked_stream if companion_hacked_stream != null else companion_idle_1_stream
+			companion_video_player.stop()
+			companion_video_player.stream = hack_str
+			companion_video_player.visible = true
+			companion_video_player.paused = false
+			companion_video_player.play()
+		else:
+			# ARREGLASTE LA TERMINAL -> Estática y vuelve al ciclo de Idle 1 / Look Around 2
+			companion_next_is_look_around = false
+			_play_next_normal_companion_clip()
+
+	# 2. Descontar el golpe de estática (0.35s)
+	if companion_static_timer > 0.0:
+		companion_static_timer = max(0.0, companion_static_timer - delta)
+		if is_instance_valid(companion_static_burst_rect):
+			companion_static_burst_rect.visible = (companion_static_timer > 0.0)
+
+	# 3. En estado normal: congelar en el último fotograma (~7.85s) para esperar 5 segundos sin pantalla vacía
+	if not is_hacked_now:
+		if companion_idle_wait_timer > 0.0:
+			companion_idle_wait_timer -= delta
+			if companion_idle_wait_timer <= 0.0:
+				_play_next_normal_companion_clip()
+		elif not companion_video_player.paused and companion_video_player.is_playing():
+			var v_len: float = companion_video_player.get_stream_length()
+			var freeze_point: float = (v_len - 0.12) if v_len > 1.0 else 7.85
+			if companion_video_player.stream_position >= freeze_point:
+				companion_video_player.paused = true
+				companion_idle_wait_timer = naomi_idle_wait_seconds
+
+func _on_companion_video_finished() -> void:
+	if not is_instance_valid(companion_video_player) or companion_idle_1_stream == null:
+		return
+
+	if companion_was_hacked_state:
+		# El Video 3 (preocupada mirando abajo) hace loop continuo mientras siga hackeada
+		companion_video_player.paused = false
+		companion_video_player.play()
+	else:
+		# Respaldo por si el video duró menos de 7.85s y llegó a finished antes del freeze_point
+		if companion_idle_wait_timer <= 0.0:
+			companion_idle_wait_timer = naomi_idle_wait_seconds
+
+# =========================================================
+# SONIDO GLOBAL PARA TODOS LOS BOTONES Y TABS DE LA TABLET
+# =========================================================
+func _bind_all_tablet_button_sounds(root_node: Node) -> void:
+	for child in root_node.get_children():
+		if child is BaseButton:
+			var btn := child as BaseButton
+			# En el botón de la turbina suena al apretar (button_down); en los demás al hacer clic (pressed)
+			if btn == btn_wind_music:
+				if not btn.button_down.is_connected(_play_tablet_click_sfx):
+					btn.button_down.connect(_play_tablet_click_sfx)
+			else:
+				if not btn.pressed.is_connected(_play_tablet_click_sfx):
+					btn.pressed.connect(_play_tablet_click_sfx)
+		elif child is TabContainer:
+			var tc := child as TabContainer
+			if not tc.tab_clicked.is_connected(_on_tablet_tab_clicked_sfx):
+				tc.tab_clicked.connect(_on_tablet_tab_clicked_sfx)
+		if child.get_child_count() > 0:
+			_bind_all_tablet_button_sounds(child)
+
+func _on_tablet_tab_clicked_sfx(_tab_idx: int) -> void:
+	_play_tablet_click_sfx()
+
+func _play_tablet_click_sfx() -> void:
+	if is_instance_valid(sfx_click_player) and sfx_click_player.stream != null:
+		sfx_click_player.pitch_scale = randf_range(0.95, 1.06)
+		sfx_click_player.play()
+
+
+# =========================================================
+# 9. GUÍA CONTEXTUAL: LE DICE AL JUGADOR QUÉ HACER AHORA
+# =========================================================
+const GUIDE_COLORS: Array[Color] = [Color("#00ff9d"), Color("#00f0ff"), Color("#ffaa00"), Color("#ff1744")]
+
+func _update_guidance(delta: float) -> void:
+	if not is_instance_valid(guide_panel):
+		return
+	guide_tick -= delta
+	var blink: float = 0.5 + 0.5 * sin(pulse_phase * 2.4)
+
+	# La lógica cuesta poco, pero no hace falta recalcularla en cada frame
+	if guide_tick <= 0.0:
+		guide_tick = 0.15
+		var g: Dictionary = _compute_guidance()
+		guide_level = int(g["level"])
+		var col: Color = GUIDE_COLORS[guide_level]
+		lbl_guide_title.text = String(g["title"])
+		lbl_guide_title.modulate = col
+		lbl_guide_text.text = String(g["text"])
+		lbl_guide_goal.text = "🎯 CONTENCIONES\n%d / %d" % [gates_closed_by_guard, TOTAL_DEFENSES_REQUIRED]
+		guide_action_tab = int(g["tab"])
+		btn_guide_action.visible = guide_action_tab >= 0
+		if guide_action_tab >= 0:
+			btn_guide_action.text = "IR A PESTAÑA 0%d >>" % (guide_action_tab + 1)
+			_apply_styled_button(btn_guide_action, col, true)
+		guide_style.bg_color = Color(col.r * 0.12, col.g * 0.12, col.b * 0.12, 0.96)
+		guide_focus = g["focus"]
+
+	# Parpadeo del borde según urgencia
+	var base_col: Color = GUIDE_COLORS[guide_level]
+	guide_style.border_color = base_col.lerp(Color.WHITE, blink * 0.35) if guide_level >= 2 else base_col
+
+	# Resalta (pulsa) los botones que conviene tocar y apaga el resto
+	for c in guide_prev_focus:
+		if is_instance_valid(c) and not guide_focus.has(c):
+			c.modulate = Color.WHITE
+	for c in guide_focus:
+		if is_instance_valid(c):
+			c.modulate = Color(1.0, 1.0, 1.0).lerp(Color(1.7, 1.55, 0.75), blink)
+	guide_prev_focus = guide_focus.duplicate()
+
+func _compute_guidance() -> Dictionary:
+	var video_down: bool = (light_hacked_by_monster or camera_disabled_timer > 0.0)
+	var cams_ok: bool = (not video_down and companion_pc_unlocked)
+	var turbine_ok: bool = (music_box_charge >= 40.0 and power_energy > 0.0)
+
+	# 1) La Niña en la cámara que estás mirando: reaccionar YA
+	if ghost_active_cam != "" and selected_cam_id == ghost_active_cam and not video_down:
+		var others: Array[Control] = []
+		for k in cam_select_buttons.keys():
+			if k != selected_cam_id and is_instance_valid(cam_select_buttons[k]):
+				others.append(cam_select_buttons[k])
+		return _guide(3, "👁️ ¡LA NIÑA ESTÁ EN ESTA CÁMARA!",
+			"Cambiá de cámara AHORA (%.1fs). No uses el FLASH ni sigas mirándola." % max(0.0, GHOST_MAX_STARE_TIME - ghost_stare_timer), -1, others)
+
+	# 2) Sin energía
+	if power_energy <= 0.0:
+		return _guide(3, "⚡ SIN ENERGÍA",
+			"Las compuertas y la turbina no funcionan. Mirá las cámaras y esperá que se recupere.", -1, [])
+
+	# 3) Subject-Zero activo
+	if monster_attack_active:
+		var node_id: String = _get_monster_node_id()
+		var door_closed_on_it: bool = (door_node_states.get(node_id, "OPEN") == "LOCKED")
+		if door_closed_on_it:
+			return _guide(1, "🚪 COMPUERTA CERRADA: ESPERÁ EL GOLPE",
+				"Cuando escuches el golpe metálico (THUD) se fue. Después ABRÍ la compuerta para dejar de gastar energía.", -1, [btn_inject])
+		if selected_cam_id == node_id and cams_ok:
+			if monster_security_level >= TOTAL_SECURITY_LEVELS:
+				return _guide(3, "☣️ SUBJECT-ZERO EN C%s: ¡CERRÁ LA COMPUERTA!" % node_id,
+					"Es el último pasillo: el FLASH solo lo frena un poco. Tocá CERRAR COMPUERTA y esperá el golpe.", -1, [btn_inject])
+			return _guide(3, "☣️ SUBJECT-ZERO EN C%s: ¡DISPARÁ EL FLASH!" % node_id,
+				"Tocá FLASH ahora para hacerlo retroceder. Si lo dejás, avanza y hackea el sector.", -1, [btn_quick_flash])
+
+	# 4) Sistemas sabotados (reparar)
+	if video_down:
+		return _guide(3 if monster_attack_active else 2, "🚨 ÓPTICA CAÍDA: NO PODÉS VER NI USAR FLASH",
+			"Alineá las 4 perillas en la pestaña 02 para recuperar las cámaras.", 1, [])
+	if not companion_pc_unlocked:
+		return _guide(3 if monster_attack_active else 2, "🚨 RADAR CAÍDO: EL MONSTRUO VA AL DOBLE",
+			"Completá la secuencia hexadecimal en la pestaña 03 para reparar el radar.", 2, [])
+
+	# 5) Subject-Zero se acerca pero no lo ves
+	if monster_attack_active:
+		var perk_btn: Array[Control] = []
+		var tip: String = "Revisá las cámaras (C1–C4 o tocá el mapa) hasta verlo."
+		if mia_prediction_ready and current_mission.companion_perk == "prediction" and is_instance_valid(btn_companion_perk):
+			tip += " Mia puede rastrearlo: usá su habilidad."
+			perk_btn.append(btn_companion_perk)
+		return _guide(2, "⚠️ SUBJECT-ZERO SE ACERCA", tip, -1, perk_btn)
+
+	# 6) Mantenimiento
+	if not turbine_ok:
+		return _guide(3, "🌀 TURBINA CAÍDA (%d%%)" % int(music_box_charge),
+			"Mantené APRETADO el botón de turbina hasta pasar el 40%. Sin turbina sube el calor y se gasta energía.", 0, [btn_wind_music])
+	if bunker_temperature >= 50.0:
+		return _guide(2, "🌡️ SALA CALIENTE (%d°C)" % int(bunker_temperature),
+			"Mantené la turbina sobre 40% para enfriar. Pasados 70°C gastás más energía.", 0, [btn_wind_music])
+	if music_box_charge < 60.0:
+		return _guide(1, "🌀 TURBINA BAJA (%d%%)" % int(music_box_charge),
+			"Se descarga sola. Recargala ahora que está tranquilo, antes de que llegue Subject-Zero.", 0, [btn_wind_music])
+	if power_energy < 25.0:
+		return _guide(2, "⚡ ENERGÍA BAJA (%d%%)" % int(power_energy),
+			"Evitá cerrar compuertas y usar FLASH sin necesidad. La energía se recupera con la turbina arriba y sin puertas cerradas.", -1, [])
+
+	return _guide(0, "✅ TODO ESTABLE",
+		"Subject-Zero todavía no ataca. Mantené la turbina arriba y recorré las cámaras. Si ves a la Niña, cambiá de cámara enseguida.", -1, [])
+
+func _guide(level: int, title: String, text: String, tab: int, focus: Array[Control]) -> Dictionary:
+	return {"level": level, "title": title, "text": text, "tab": tab, "focus": focus}
+
+func _show_help_dialog() -> void:
+	if not is_instance_valid(help_dialog):
+		help_dialog = AcceptDialog.new()
+		help_dialog.title = "❓ CÓMO SE JUEGA"
+		help_dialog.ok_button_text = "ENTENDIDO"
+		help_dialog.dialog_autowrap = true
+		help_dialog.dialog_text = "\n".join([
+			"🎯 OBJETIVO: sobrevivir hasta las 6 AM conteniendo a Subject-Zero.",
+			"",
+			"🎥 CÁMARAS (C1–C4 o tocá el mapa): buscá a Subject-Zero. La barra de arriba siempre te dice qué hacer.",
+			"👁️ LA NIÑA FANTASMA: si aparece en tu cámara, cambiá de cámara en menos de 1 segundo. NUNCA le dispares FLASH.",
+			"🔦 FLASH: en C1–C3 hace retroceder a Subject-Zero (-6% energía). En C4 solo lo frena.",
+			"🚪 COMPUERTA: en C4 cerrala, esperá el golpe (THUD) y abrila de nuevo. Solo 1 a la vez y gasta energía.",
+			"🌀 TURBINA (pestaña 01): mantené apretado para subirla. Bajo 40% la sala se calienta y se gasta energía.",
+			"🎛️ PERILLAS (02) y 💻 RADAR (03): la Niña los sabotea. Si el título de la pestaña dice 🚨, repará ahí.",
+			"🔮 COMPAÑERA: usá su habilidad cuando esté lista (botón rojo grande, abajo a la izquierda).",
+		])
+		add_child(help_dialog)
+	help_dialog.popup_centered(Vector2i(620, 460))

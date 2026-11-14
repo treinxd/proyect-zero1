@@ -1,0 +1,11 @@
+[gd_scene format=3 uid="uid://b7ye4l0752nrb"]
+
+[ext_resource type="Script" uid="uid://c0extcsprkfwo" path="res://BunkerMonitor3D.gd" id="1_xvlpn"]
+[ext_resource type="AudioStream" uid="uid://dxtgmt1n88m2w" path="res://Music/in_game.mp3" id="2_oxnh8"]
+
+[node name="BunkerMonitor3d" type="Node3D" unique_id=1565149025]
+script = ExtResource("1_xvlpn")
+
+[node name="AudioStreamPlayer2D" type="AudioStreamPlayer2D" parent="." unique_id=1958276371]
+stream = ExtResource("2_oxnh8")
+autoplay = true

@@ -7,6 +7,7 @@ const OperatorConsoleScript = preload("res://operator_console.gd")
 @export var screen_size_meters: Vector2 = Vector2(1.92, 1.08)
 @export var enable_camera_parallax: bool = true
 
+
 @export_group("Estética PS1 / PS2 (Toda la Escena)")
 @export_range(1.0, 6.0, 1.0) var psx_pixel_scale: float = 1.2 # 2.0 = PS2 nítido, 3.0 = PS1/PS2 ideal, 4.0 = PS1 crudo
 @export_range(60.0, 240.0, 10.0) var psx_vertex_jitter: float = 130.0 # Temblor de vértices 3D en toda la habitación
@@ -35,6 +36,10 @@ func _ready() -> void:
 		var mat := screen_mesh_instance.material_override as ShaderMaterial
 		if mat:
 			mat.set_shader_parameter("screen_tex", ui_viewport.get_texture())
+	if is_instance_valid(alarm_light) and is_instance_valid(console_ui):
+		var urgent: bool = console_ui.monster_attack_active or console_ui.bunker_temperature >= 55.0 or console_ui.music_box_charge < 45.0
+		var spd: float = 6.5 if urgent else 1.8
+		alarm_light.light_energy = 1.8 + sin(time_acc * spd) * 1.0
 
 func _process(delta: float) -> void:
 	time_acc += delta
@@ -73,7 +78,6 @@ func _build_subviewport_and_ui() -> void:
 
 	console_ui = OperatorConsoleScript.new()
 	console_ui.set("embedded_in_3d_monitor", true)
-	console_ui.enable_crt_effect = false
 	if not available_missions.is_empty():
 		console_ui.available_missions = available_missions
 	ui_viewport.add_child(console_ui)
